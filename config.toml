@@ -1,0 +1,19 @@
+[scanner]
+edge_threshold = 0.05
+scan_interval_minutes = 30
+stale_odds_minutes = 30
+bankroll = 500.0
+
+[sports]
+enabled = ["nba", "nhl", "mlb", "epl"]
+
+[sources]
+pinnacle = true
+stake = true
+miseonjeu = true
+
+[db]
+path = "polyedge.db"
+
+[keys]
+# stake_api_key = ""
