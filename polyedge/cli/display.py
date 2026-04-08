@@ -32,11 +32,11 @@ def print_pnl_table(pnl_by_sport: dict[str, float], total: float) -> None:
     for sport, amt in sorted(pnl_by_sport.items()):
         c = "green" if amt >= 0 else "red"
         t.add_row(sport.upper(), f"[{c}]{amt:+.2f}[/{c}]")
-    t.add_row("─"*8, "─"*10)
+    t.add_row("-"*8, "-"*10)
     c = "green" if total >= 0 else "red"
     t.add_row("[bold]TOTAL[/bold]", f"[bold {c}]{total:+.2f}[/bold {c}]")
     console.print(t)
 
 def print_scan_summary(signals_found, markets_scanned, sources, duration_ms) -> None:
-    console.print(f"[dim]Scanned {markets_scanned} markets · "
-                  f"{signals_found} signal(s) · Sources: {', '.join(sources)} · {duration_ms}ms[/dim]")
+    console.print(f"[dim]Scanned {markets_scanned} markets - "
+                  f"{signals_found} signal(s) - Sources: {', '.join(sources)} - {duration_ms}ms[/dim]")

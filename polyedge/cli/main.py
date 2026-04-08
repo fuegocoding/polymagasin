@@ -34,7 +34,7 @@ def watch(config: str = typer.Option("config.toml")):
     try:
         while True:
             asyncio.run(_do_scan(config))
-            console.print(f"[dim]Next scan in {cfg.scanner.scan_interval_minutes}min…[/dim]")
+            console.print(f"[dim]Next scan in {cfg.scanner.scan_interval_minutes}min...[/dim]")
             time.sleep(ivl)
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopped.[/yellow]")
@@ -74,7 +74,7 @@ def resolve(
     resolve_signal(conn, signal_id, outcome, outcome_price)
     s = get_signal_by_id(conn, signal_id)
     c = "green" if s.pnl >= 0 else "red"
-    console.print(f"Signal {signal_id} → {outcome} | P&L: [{c}]{s.pnl:+.2f}[/{c}]")
+    console.print(f"Signal {signal_id} -> {outcome} | P&L: [{c}]{s.pnl:+.2f}[/{c}]")
 
 async def _do_scan(cfg_path: str) -> None:
     cfg, conn = _load(cfg_path)
