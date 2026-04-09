@@ -7,13 +7,13 @@ def insert_signal(conn: sqlite3.Connection, signal: Signal) -> int:
     cur = conn.execute(
         """INSERT INTO signals
            (timestamp,sport,league,team1,team2,game_date,edge_pct,poly_price,
-            poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status,hedge_odds,hedge_size)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (signal.timestamp.isoformat(), signal.sport, signal.league,
          signal.team1, signal.team2, signal.game_date.isoformat(),
          signal.edge_pct, signal.poly_price, signal.poly_market_id,
          signal.fair_value, signal.kelly_fraction, signal.suggested_size,
-         signal.sources_used, signal.status),
+         signal.sources_used, signal.status, signal.hedge_odds, signal.hedge_size),
     )
     conn.commit()
     return cur.lastrowid
@@ -23,6 +23,19 @@ def get_signal_by_id(conn: sqlite3.Connection, sid: int) -> Signal:
     if row is None:
         raise ValueError(f"Signal {sid} not found")
     return _row(row)
+
+def get_bankroll(conn) -> float:
+    row = conn.execute("SELECT balance FROM bankroll WHERE id=1").fetchone()
+    return row["balance"] if row else 1000.0
+
+def update_bankroll(conn, change: float, reason: str) -> None:
+    conn.execute("UPDATE bankroll SET balance = balance + ?, updated_at = datetime('now') WHERE id=1", (change,))
+    new_bal = get_bankroll(conn)
+    conn.execute(
+        "INSERT INTO bankroll_history (timestamp, balance, change, reason) VALUES (datetime('now'), ?, ?, ?)",
+        (new_bal, change, reason),
+    )
+    conn.commit()
 
 def get_signals(conn, sport=None, min_edge=0.0, status=None) -> list[Signal]:
     q = "SELECT * FROM signals WHERE edge_pct >= ?"
@@ -78,7 +91,5 @@ def _row(row: sqlite3.Row) -> Signal:
         kelly_fraction=row["kelly_fraction"], suggested_size=row["suggested_size"],
         sources_used=row["sources_used"], status=row["status"],
         outcome_price=row["outcome_price"], pnl=row["pnl"],
-    )raction=row["kelly_fraction"], suggested_size=row["suggested_size"],
-        sources_used=row["sources_used"], status=row["status"],
-        outcome_price=row["outcome_price"], pnl=row["pnl"],
+        hedge_odds=row["hedge_odds"], hedge_size=row["hedge_size"]
     )
