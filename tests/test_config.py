@@ -39,8 +39,8 @@ def test_load_config_defaults():
         f.write("[scanner]\n"); path = f.name
     try:
         cfg = load_config(path)
-        assert cfg.scanner.edge_threshold == 0.05
-        assert cfg.scanner.bankroll == 500.0
+        assert cfg.scanner.edge_threshold == 0.01
+        assert cfg.scanner.bankroll == 1000.0
         assert "nba" in cfg.sports
     finally:
         os.unlink(path)

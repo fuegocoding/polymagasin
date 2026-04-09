@@ -16,12 +16,12 @@ def test_devig_even_odds():
     assert fa == pytest.approx(0.50)
 
 def test_edge_positive():
-    r = calculate_edge(poly_price=0.65, fair_home=0.55, fair_away=0.45, team_is_home=True)
+    r = calculate_edge(poly_price=0.45, fair_home=0.55, fair_away=0.45, team_is_home=True)
     assert r.edge_pct == pytest.approx(0.10)
     assert r.fair_value == pytest.approx(0.55)
 
 def test_edge_negative_returns_none():
-    r = calculate_edge(poly_price=0.45, fair_home=0.55, fair_away=0.45, team_is_home=True)
+    r = calculate_edge(poly_price=0.65, fair_home=0.55, fair_away=0.45, team_is_home=True)
     assert r is None
 
 def test_average_fair_values():

@@ -16,7 +16,7 @@ def devig(odds_home: float, odds_away: float) -> tuple[float, float]:
 
 def calculate_edge(poly_price, fair_home, fair_away, team_is_home) -> EdgeResult | None:
     fv = fair_home if team_is_home else fair_away
-    e = poly_price - fv
+    e = fv - poly_price
     return EdgeResult(edge_pct=e, fair_value=fv) if e > 0 else None
 
 def average_fair_values(lines: list[tuple[float, float]]) -> tuple[float, float]:
