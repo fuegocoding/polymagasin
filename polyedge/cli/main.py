@@ -38,23 +38,31 @@ def scan(config: str = typer.Option("config.toml")):
     asyncio.run(_do_scan(config))
 
 
+from polyedge.ws import WebSocketManager
+
+
 @app.command()
 def watch(config: str = typer.Option("config.toml")):
-    """Continuously scan on the configured interval. Ctrl+C to stop."""
-    cfg = load_config(config)
-    ivl = cfg.scanner.scan_interval_minutes * 60
+    """Continuously scan using WebSocket architecture. Ctrl+C to stop."""
+    cfg, conn = _load(config)
     console.print(
-        f"[cyan]Scanning every {cfg.scanner.scan_interval_minutes}min. Ctrl+C to stop.[/cyan]"
+        f"[cyan]Connecting to WebSockets for real-time edge scanning (>= {cfg.scanner.edge_threshold * 100}%). Ctrl+C to stop.[/cyan]"
     )
+
+    async def on_update(markets, odds):
+        # Triggered whenever new WS data arrives
+        sigs = await run_scan(markets, odds, cfg, conn)
+        if sigs:
+            print_signals_table(sigs)
+            log_scan(conn, len(markets), len(sigs), ["websocket"], 0)
+
+    manager = WebSocketManager(cfg, conn, on_update)
+
     try:
-        while True:
-            asyncio.run(_do_scan(config))
-            console.print(
-                f"[dim]Next scan in {cfg.scanner.scan_interval_minutes}min...[/dim]"
-            )
-            time.sleep(ivl)
+        asyncio.run(manager.start())
     except KeyboardInterrupt:
-        console.print("\n[yellow]Stopped.[/yellow]")
+        manager.stop()
+        console.print("\n[yellow]Stopped WebSocket Manager.[/yellow]")
 
 
 @app.command()
@@ -111,7 +119,9 @@ async def _do_scan(cfg_path: str) -> None:
         "stake": StakeFetcher,
         "miseonjeu": MiseonjeuFetcher,
     }
-    async with httpx.AsyncClient(headers={"User-Agent": "PolyEdge/1.0"}) as client:
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "PolyEdge/1.0"}, follow_redirects=True
+    ) as client:
         poly_task = asyncio.create_task(PolymarketFetcher(client).fetch(cfg.sports))
         sb_tasks = {}
         if "pinnacle" in active:
