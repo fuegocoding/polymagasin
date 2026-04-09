@@ -32,23 +32,9 @@ WEB_PID=$!
 
 echo "Processes started: Scanner ($SCANNER_PID), Web ($WEB_PID)"
 
-# Monitor processes
-while true; do
-  if ! kill -0 $SCANNER_PID 2>/dev/null; then
-    echo "Scanner process died. Restarting..."
-    python main.py watch --config "$CONFIG_PATH" &
-    SCANNER_PID=$!
-  fi
-  if ! kill -0 $WEB_PID 2>/dev/null; then
-    echo "Web process died. Restarting..."
-    streamlit run ui.py \
-      --server.port="${PORT:-8501}" \
-      --server.headless=true \
-      --server.address=0.0.0.0 \
-      --server.enableCORS=false \
-      --server.enableXsrfProtection=false \
-      --browser.gatherUsageStats=false &
-    WEB_PID=$!
-  fi
-  sleep 10
-done
+# Wait for either to exit
+wait -n $SCANNER_PID $WEB_PID
+
+echo "A process exited unexpectedly. Shutting down."
+kill $SCANNER_PID $WEB_PID 2>/dev/null || true
+exit 1

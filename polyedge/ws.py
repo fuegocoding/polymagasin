@@ -78,7 +78,6 @@ class WebSocketManager:
         while True:
             try:
                 markets = await fetcher.fetch(self.config.sports)
-                # Replace markets dict on each poll so closed markets don't linger
                 self.markets = {m.market_id: m for m in markets}
                 console.print(f"[cyan][Polymarket] {len(markets)} active markets[/cyan]")
                 await self._trigger_update()
@@ -87,6 +86,9 @@ class WebSocketManager:
             await asyncio.sleep(self.config.scanner.scan_interval_minutes * 60)
 
     async def _poll_sportsbook(self, name, fetcher_cls, api_key):
+        # Stagger start to avoid spikes
+        import random as _random
+        await asyncio.sleep(_random.uniform(2, 10))
         fetcher = fetcher_cls(self._client, api_key)
         while True:
             try:
@@ -101,16 +103,23 @@ class WebSocketManager:
             await asyncio.sleep(self.config.scanner.scan_interval_minutes * 60)
 
     async def _trigger_update(self):
-        # Debounce: cancel any pending delayed call and schedule a new one.
-        # This collapses rapid-fire updates from multiple sources into a single scan.
         if self._debounce_task and not self._debounce_task.done():
             self._debounce_task.cancel()
-        self._debounce_task = asyncio.create_task(self._delayed_update())
+        try:
+            self._debounce_task = asyncio.create_task(self._delayed_update())
+        except Exception: pass
 
     async def _delayed_update(self):
-        await asyncio.sleep(3)  # wait 3s to collect updates from all sources
-        if self.markets:
-            await self.on_update(list(self.markets.values()), list(self.odds.values()))
+        try:
+            await asyncio.sleep(5)  # wait 5s
+            if self.markets:
+                await self.on_update(list(self.markets.values()), list(self.odds.values()))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            console.print(f"[red][Update Error] {e}[/red]")
+            import traceback
+            traceback.print_exc()
 
     def stop(self):
         for task in self._tasks:
