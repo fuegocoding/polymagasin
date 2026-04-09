@@ -12,8 +12,8 @@ import plotly.graph_objects as go
 
 # --- Professional Styling ---
 st.set_page_config(
-    page_title="PolyEdge | Professional Arbitrage",
-    page_icon="📈",
+    page_title="PolyEdge | Institutional Arbitrage",
+    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -21,224 +21,239 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: #ffffff; }
-    .stMetric { border: 1px solid #333; padding: 15px; border-radius: 10px; background-color: #161b22; }
-    [data-testid="stMetricValue"] { font-size: 24px; font-weight: bold; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; font-weight: 600; font-size: 16px; }
-    .stTable { background-color: #161b22; border-radius: 10px; }
+    .stMetric { border: 1px solid #1f2937; padding: 20px; border-radius: 12px; background-color: #111827; }
+    [data-testid="stMetricValue"] { font-size: 28px; font-weight: 800; color: #00ff88; }
+    [data-testid="stMetricLabel"] { font-size: 14px; color: #9ca3af; font-weight: 600; }
+    .stTabs [data-baseweb="tab-list"] { gap: 30px; background-color: transparent; }
+    .stTabs [data-baseweb="tab"] { height: 60px; font-weight: 700; font-size: 18px; color: #6b7280; }
+    .stTabs [data-baseweb="tab"]:hover { color: #ffffff; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #00ff88; border-bottom-color: #00ff88; }
+    div[data-testid="stExpander"] { border: 1px solid #1f2937; border-radius: 12px; background-color: #111827; }
     </style>
     """, unsafe_allow_html=True)
 
 # Auto-refresh every 30 seconds
 st_autorefresh(interval=30_000, key="autorefresh")
 
-# --- Core Data Loading (Serializable Only) ---
+# --- Data Engine ---
 def get_db_conn():
     cfg = load_config()
     return init_db(cfg.db_path)
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=2)
 def load_serializable_data():
-    """
-    Returns only simple Python types (lists, dicts, DataFrames)
-    to avoid Streamlit serialization/pickle errors.
-    """
     cfg_obj = load_config()
     conn = init_db(cfg_obj.db_path)
     
-    # 1. Config as a dict
     config_dict = {
         "edge_threshold": cfg_obj.scanner.edge_threshold,
         "db_path": cfg_obj.db_path,
         "pinnacle_key": cfg_obj.pinnacle_api_key,
-        "stake_key": cfg_obj.stake_api_key,
-        "poly_key": cfg_obj.polymarket_key
+        "poly_key": cfg_obj.polymarket_key,
+        "sources": cfg_obj.sources
     }
     
-    # 2. Signals as list of dicts (Signal dataclass might be causing issues if pickle is finicky)
     signals_raw = get_signals(conn)
     signals_list = [vars(s) for s in signals_raw]
-    
-    # 3. P&L by sport
     pnl_sport = get_pnl_by_sport(conn)
-    
-    # 4. Bankroll
     bankroll = get_bankroll(conn)
     
-    # 5. History DataFrame
+    # Advanced History Loading
     history_df = pd.read_sql("SELECT * FROM bankroll_history ORDER BY timestamp ASC", conn)
-    history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
+    if not history_df.empty:
+        history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
+        # Add a running total if needed, but 'balance' is already absolute
     
     return config_dict, signals_list, pnl_sport, bankroll, history_df
 
-# Load the data
-try:
-    config_dict, signals_list, pnl_sport, bankroll, history_df = load_serializable_data()
-except Exception as e:
-    st.error(f"Failed to load data: {e}")
-    st.stop()
+config_dict, signals_list, pnl_sport, bankroll, history_df = load_serializable_data()
 
-# --- Computed Metrics ---
+# --- Advanced Computation ---
 pending   = [s for s in signals_list if s['status'] == "pending"]
 resolved  = [s for s in signals_list if s['status'] in ("won", "lost", "push")]
-total_pnl = sum(s['pnl'] for s in resolved if s['pnl'] is not None)
-deployed  = sum(s['suggested_size'] + (s['hedge_size'] or 0) for s in pending)
+total_realized_pnl = sum(s['pnl'] for s in resolved if s['pnl'] is not None)
 
-# --- Header ---
-st.title("🛡️ PolyEdge Arbitrage Intelligence")
+# Guaranteed Profit from Open Arbs
+unrealized_locked_profit = 0
+total_deployed = 0
+for s in pending:
+    if s['poly_price'] > 0:
+        cost = s['suggested_size'] + (s['hedge_size'] or 0)
+        payout = s['suggested_size'] / s['poly_price']
+        unrealized_locked_profit += (payout - cost)
+        total_deployed += cost
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Live Bankroll", f"${bankroll:,.2f}", 
-          delta=f"{total_pnl:+,.2f} Realized" if total_pnl != 0 else None)
-m2.metric("Working Capital", f"${deployed:,.2f}", 
-          help="Total capital locked in open positions (Poly + Sharp).")
-m3.metric("Win Rate", f"{(sum(1 for s in resolved if s['status'] == 'won')/len(resolved)*100 if resolved else 0):.1f}%",
-          help="Polymarket leg win rate. (Profit is locked either way).")
-m4.metric("Active Arbs", len(pending), help="Total number of currently open positions.")
+net_asset_value = bankroll + unrealized_locked_profit
+
+# --- Top Dashboard Layout ---
+st.title("🛡️ PolyEdge | Institutional Arb v2.3")
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Net Asset Value", f"${net_asset_value:,.2f}", 
+          help="Total Account Value (Current Bankroll + Guaranteed Profit from Open Trades)",
+          delta=f"{total_realized_pnl:+,.2f} Realized")
+c2.metric("Working Capital", f"${total_deployed:,.2f}", 
+          help="Capital currently locked in arbitrage positions.")
+c3.metric("Guaranteed Profit", f"${unrealized_locked_profit:,.2f}", 
+          help="Money already 'made' but waiting for matches to finish settling.")
+c4.metric("Active Engines", sum(1 for v in config_dict['sources'].values() if v), 
+          help="Number of data sources currently feeding the scanner.")
 
 st.divider()
 
-# --- Navigation ---
-tab_ops, tab_perf, tab_hist, tab_settings = st.tabs([
+# --- Main Navigation ---
+tab_live, tab_analytics, tab_ledger, tab_config = st.tabs([
     "🎯 Live Opportunities", 
-    "📊 Performance Analytics", 
-    "📜 Trade Ledger", 
-    "⚙️ System Settings"
+    "📈 Performance Analytics", 
+    "📖 Trade Ledger", 
+    "⚙️ System Control"
 ])
 
-# --- Tab 1: Live Opportunities ---
-with tab_ops:
+# --- TAB 1: LIVE OPPORTUNITIES ---
+with tab_live:
     st.subheader("Current Arbitrage Positions")
     if pending:
-        rows = []
+        live_rows = []
         for s in sorted(pending, key=lambda x: x['edge_pct'], reverse=True):
             poly_side = s['sources_used'].split(":")[-1]
-            total_cost = s['suggested_size'] + (s['hedge_size'] or 0)
-            locked_profit = (s['suggested_size'] / s['poly_price']) - total_cost if s['poly_price'] > 0 else 0
-            profit_margin = (locked_profit / total_cost * 100) if total_cost > 0 else 0
+            cost = s['suggested_size'] + (s['hedge_size'] or 0)
+            profit = (s['suggested_size'] / s['poly_price']) - cost if s['poly_price'] > 0 else 0
+            roi = (profit / cost * 100) if cost > 0 else 0
             
-            # Age calculation
             age_td = datetime.now(timezone.utc) - s['timestamp'].replace(tzinfo=timezone.utc)
-            age_str = f"{int(age_td.total_seconds() // 60)}m {int(age_td.total_seconds() % 60)}s"
-
-            rows.append({
+            
+            live_rows.append({
                 "Matchup": f"{s['team1']} vs {s['team2']}",
                 "Sport": s['sport'].upper(),
-                "Poly Buy": f"{poly_side} ${s['suggested_size']:.2f} @ {s['poly_price']:.3f}",
+                "Poly Exec": f"{poly_side} ${s['suggested_size']:.2f} @ {s['poly_price']:.3f}",
                 "Sharp Hedge": f"${s['hedge_size'] or 0:.2f} @ {s['hedge_odds']:.3f}",
-                "Total Cost": f"${total_cost:.2f}",
-                "Profit": locked_profit,
-                "ROI %": profit_margin,
-                "Age": age_str
+                "Total Cost": cost,
+                "Locked Profit": profit,
+                "ROI %": roi,
+                "Age": f"{int(age_td.total_seconds()//60)}m {int(age_td.total_seconds()%60)}s"
             })
         
-        df_ops = pd.DataFrame(rows)
+        df_live = pd.DataFrame(live_rows)
         st.dataframe(
-            df_ops.style.format({
-                "Profit": "${:.2f}",
+            df_live.style.format({
+                "Total Cost": "${:.2f}",
+                "Locked Profit": "${:.2f}",
                 "ROI %": "{:.2f}%"
-            }).map(lambda x: "color: #00ff88; font-weight: bold;" if isinstance(x, (int, float)) and x > 0 else "", subset=["Profit", "ROI %"]),
+            }).map(lambda x: "color: #00ff88; font-weight: bold;" if isinstance(x, (int, float)) and x > 0 else "", 
+                   subset=["Locked Profit", "ROI %"]),
             use_container_width=True, 
             hide_index=True
         )
+        st.success(f"📈 **Consolidated Guaranteed Return: ${unrealized_locked_profit:,.2f}**")
+    else:
+        st.info("Scanner is active. No arbitrage opportunities meet the minimum ROI threshold at this moment.")
+
+# --- TAB 2: PERFORMANCE ANALYTICS ---
+with tab_analytics:
+    if not history_df.empty:
+        col_curve, col_stats = st.columns([2, 1])
         
-        total_profit_locked = sum((s['suggested_size'] / s['poly_price']) - (s['suggested_size'] + (s['hedge_size'] or 0)) 
-                                  for s in pending if s['poly_price'] > 0)
-        st.success(f"💰 **Total Guaranteed Profit from Open Trades: ${total_profit_locked:,.2f}**")
-    else:
-        st.info("Searching for arbitrage opportunities... (Market scanners active)")
-
-# --- Tab 2: Performance Analytics ---
-with tab_perf:
-    col_l, col_r = st.columns([2, 1])
-    
-    with col_l:
-        st.subheader("Equity Curve")
-        if not history_df.empty:
-            # We want to see the progression. If history is small, add a start point.
-            fig = px.area(history_df, x="timestamp", y="balance", 
-                          title="Bankroll Over Time",
-                          labels={"balance": "Total Value ($)", "timestamp": "Time"},
-                          color_discrete_sequence=["#00ff88"])
-            fig.update_layout(template="plotly_dark", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+        with col_curve:
+            st.subheader("Equity Growth")
+            # Create a more professional equity curve
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=history_df['timestamp'], 
+                y=history_df['balance'],
+                mode='lines+markers',
+                name='Bankroll',
+                line=dict(color='#00ff88', width=3),
+                fill='tozeroy',
+                fillcolor='rgba(0, 255, 136, 0.1)'
+            ))
+            fig.update_layout(
+                template="plotly_dark",
+                margin=dict(l=0, r=0, t=20, b=0),
+                xaxis=dict(showgrid=False),
+                yaxis=dict(gridcolor='#1f2937'),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                height=400
+            )
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.write("Insufficient data for equity curve.")
 
-    with col_r:
-        st.subheader("Profit Distribution")
-        if pnl_sport:
-            pnl_data = pd.DataFrame(list(pnl_sport.items()), columns=["Sport", "Profit"])
-            fig_pie = px.pie(pnl_data, values="Profit", names="Sport", hole=0.4,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
-            fig_pie.update_layout(template="plotly_dark", showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.write("No resolved trades yet.")
+        with col_stats:
+            st.subheader("Profit Mix")
+            if pnl_sport:
+                pnl_data = pd.DataFrame(list(pnl_sport.items()), columns=["Sport", "Profit"])
+                fig_pie = px.sunburst(pnl_data, path=['Sport'], values='Profit',
+                                     color='Profit', color_continuous_scale='Viridis')
+                fig_pie.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("No resolved trade data.")
 
-    st.subheader("Statistical Analysis")
-    if resolved:
-        res_df = pd.DataFrame(resolved)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Avg Trade Profit", f"${res_df['pnl'].mean():.2f}")
-        c2.metric("Median ROI", f"{res_df['edge_pct'].median()*100:.2f}%")
-        c3.metric("Total Executed", len(resolved))
-        c4.metric("Sharpe Ratio", "N/A (Arb Risk-Free)")
+        st.subheader("Key Performance Indicators")
+        k1, k2, k3, k4 = st.columns(4)
+        if resolved:
+            rdf = pd.DataFrame(resolved)
+            k1.metric("Avg Arb ROI", f"{(rdf['edge_pct'].mean()*100):.2f}%")
+            k2.metric("Total Trades", len(resolved))
+            k3.metric("Largest Win", f"${rdf['pnl'].max():.2f}")
+            k4.metric("Sharpe Ratio", "Perfect (Arb)")
+        else:
+            st.info("Resolve trades to generate KPIs.")
     else:
-        st.info("Analytics will populate as trades resolve.")
+        st.warning("Cumulative data is being collected. Equity curve will appear after the first few trades resolve.")
 
-# --- Tab 3: Trade Ledger ---
-with tab_hist:
-    st.subheader("Resolved Arbitrage History")
-    if resolved:
-        hist_rows = []
-        for s in sorted(resolved, key=lambda x: x['timestamp'], reverse=True):
-            hist_rows.append({
-                "Date": s['timestamp'].strftime("%Y-%m-%d %H:%M"),
+# --- TAB 3: TRADE LEDGER ---
+with tab_ledger:
+    st.subheader("Complete Transaction History")
+    all_history = sorted(signals_list, key=lambda x: x['timestamp'], reverse=True)
+    if all_history:
+        ledger_rows = []
+        for s in all_history:
+            status_color = "🟢" if s['status'] == "won" else ("🔴" if s['status'] == "lost" else ("⚪" if s['status'] == "pending" else "✖️"))
+            ledger_rows.append({
+                "Time": s['timestamp'].strftime("%Y-%m-%d %H:%M"),
+                "Result": f"{status_color} {s['status'].upper()}",
+                "Sport": s['sport'].upper(),
                 "Matchup": f"{s['team1']} vs {s['team2']}",
-                "Poly Price": f"{s['poly_price']:.3f}",
-                "Sharp Odds": f"{s['hedge_odds']:.3f}",
-                "Profit ($)": f"{s['pnl']:+,.2f}",
-                "Result": s['status'].upper()
+                "ROI": f"{s['edge_pct']*100:.2f}%",
+                "Profit ($)": s['pnl'] if s['pnl'] is not None else 0.0,
+                "Poly Price": s['poly_price'],
+                "Sharp Odds": s['hedge_odds']
             })
-        st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
+        df_ledger = pd.DataFrame(ledger_rows)
+        st.dataframe(df_ledger, use_container_width=True, hide_index=True)
     else:
-        st.info("Ledger is empty.")
+        st.info("Transaction ledger is currently empty.")
 
-# --- Tab 4: System Settings ---
-with tab_settings:
-    st.subheader("System Configuration")
-    with st.expander("Financial Management", expanded=True):
-        with st.form("fin_settings"):
-            new_bank = st.number_input("Reset/Correct Bankroll ($)", value=float(bankroll))
-            new_edge = st.slider("Minimum Profit Margin %", 0.1, 5.0, float(config_dict['edge_threshold']*100.0)) / 100.0
-            if st.form_submit_button("Apply Changes"):
+# --- TAB 4: SYSTEM CONTROL ---
+with tab_config:
+    st.subheader("Core Parameters")
+    
+    with st.expander("💰 Financial Overrides"):
+        with st.form("sys_fin"):
+            f1, f2 = st.columns(2)
+            new_bank = f1.number_input("Reset Bankroll ($)", value=float(bankroll))
+            new_edge = f2.slider("Min Arb ROI %", 0.1, 5.0, float(config_dict['edge_threshold']*100.0)) / 100.0
+            if st.form_submit_button("Confirm System Update"):
                 conn = get_db_conn()
                 from polyedge.db.signals import update_bankroll
-                diff = new_bank - bankroll
-                if abs(diff) > 0.01:
-                    update_bankroll(conn, diff, "Manual correction via Dashboard")
+                if abs(new_bank - bankroll) > 0.01:
+                    update_bankroll(conn, new_bank - bankroll, "Manual update via Control Panel")
                 
-                # Update config.toml
+                # Persistence
                 import os as _os
                 config_path = _os.getenv("CONFIG_PATH", "config.toml")
                 try:
                     with open(config_path, "r") as f: data = toml.load(f)
                     data.setdefault("scanner", {})["edge_threshold"] = new_edge
                     with open(config_path, "w") as f: toml.dump(data, f)
-                    st.success("Bankroll corrected and Edge threshold updated.")
+                    st.success("Configuration updated successfully.")
                 except Exception as ex:
-                    st.error(f"Failed to update config file: {ex}")
+                    st.error(f"Config write failure: {ex}")
 
-    with st.expander("API & Diagnostics"):
-        st.write("Current API connectivity status and keys.")
-        st.code(f"Pinnacle API: {'PROTECTED' if config_dict['pinnacle_key'] else 'MISSING'}")
-        st.code(f"Stake API: {'PROTECTED' if config_dict['stake_key'] else 'MISSING'}")
-        
-    st.subheader("Active Infrastructure")
-    s1, s2, s3 = st.columns(3)
-    s1.success("Polymarket: Connected")
-    s2.success("Pinnacle (Arcadia): Live")
-    s3.warning("Stake: Cloudflare (Restricted)")
+    with st.expander("📡 Source Management"):
+        st.info("Sources are managed via config.toml. Current status below:")
+        for src, active in config_dict['sources'].items():
+            status = "✅ ACTIVE" if active else "❌ DISABLED"
+            st.write(f"**{src.upper()}**: {status}")
 
-st.caption(f"PolyEdge v2.2 Professional | Last Sync: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"PolyEdge Elite v2.3 | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
