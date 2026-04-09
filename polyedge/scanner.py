@@ -54,32 +54,37 @@ def revalidate_pending(conn, poly_markets: list, odds_lines: list, config: Confi
     for sig in pending:
         market = price_map.get(sig.poly_market_id)
         if market is None:
-            continue  # market not in current fetch, can't validate
+            continue  
         if not fresh:
-            continue  # no fresh odds to validate against
-        # Grace period: don't cancel signals younger than one scan interval
-        if (now - _tz(sig.timestamp)) < timedelta(minutes=config.scanner.scan_interval_minutes):
+            continue
+        # Grace period: 2 mins
+        if (now - _tz(sig.timestamp)) < timedelta(minutes=2):
             continue
 
         match = find_matching_odds(market, fresh)
         if not match:
-            continue  # no odds match, can't validate
+            continue
 
         pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
         fh, fa = average_fair_values(pairs)
         bet_yes = not sig.sources_used.endswith(":NO")
+        
+        # Current entry price
+        current_price = market.price_yes if bet_yes else (1.0 - market.price_yes)
+        
+        # Best current hedge odds
         if bet_yes:
-            er = calculate_edge(market.price_yes, fh, fa, match.team_is_home)
+            hedge_odds = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
         else:
-            er = calculate_edge(1.0 - market.price_yes, fa, fh, match.team_is_home)
-
-        if er is None or er.edge_pct < config.scanner.edge_threshold:
-            # Edge gone — cancel the signal
-            current_price = market.price_yes if bet_yes else (1.0 - market.price_yes)
+            hedge_odds = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
+            
+        # Is it still a profitable arb?
+        arb_cost = current_price + (1.0 / hedge_odds)
+        if arb_cost >= 1.0:
             conn.execute("UPDATE signals SET status='cancelled',outcome_price=? WHERE id=?",
                          (current_price, sig.id))
             conn.commit()
-            cancelled.append((sig, current_price, er.edge_pct if er else current_price - sig.fair_value))
+            cancelled.append((sig, current_price, 1.0 - arb_cost))
 
     return cancelled
 
@@ -94,78 +99,70 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
     fresh = [l for l in odds_lines if (now - _tz(l.fetched_at)) <= stale]
-
-    # Skip markets already being tracked as pending (not cancelled/resolved)
     pending = {s.poly_market_id for s in get_signals(conn, status="pending")}
-
     signals = []
 
     for market in poly_markets:
-        if market.market_id in pending:
-            continue
-        # Skip markets that have already settled (price near 0 or 1)
-        if market.price_yes >= 0.95 or market.price_yes <= 0.05:
-            continue
+        if market.market_id in pending: continue
+        if market.price_yes >= 0.95 or market.price_yes <= 0.05: continue
+        
         match = find_matching_odds(market, fresh)
-        if not match:
-            continue
+        if not match: continue
             
         pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
         fh, fa = average_fair_values(pairs)
         sources = ",".join(sorted({l.source for l in match.matched_lines}))
         league = match.matched_lines[0].league
 
-        # Check YES side: buy YES if price_yes < fair_yes
-        er_yes = calculate_edge(market.price_yes, fh, fa, match.team_is_home)
-        # Check NO side: buy NO if price_no = (1 - price_yes) < fair_no
-        price_no = 1.0 - market.price_yes
-        # fair_no is the complement fair value for the opposing team
-        er_no = calculate_edge(price_no, fa, fh, match.team_is_home)
+        # Evaluate both sides for arbitrage potential
+        # 1. Try buying YES on Polymarket, hedging on Sharp
+        p_yes = market.price_yes
+        h_odds_yes = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
+        arb_cost_yes = p_yes + (1.0 / h_odds_yes)
+        arb_profit_yes = (1.0 / arb_cost_yes) - 1.0 if arb_cost_yes < 1.0 else -1.0
+        
+        # 2. Try buying NO on Polymarket, hedging on Sharp
+        p_no = 1.0 - market.price_yes
+        h_odds_no = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
+        arb_cost_no = p_no + (1.0 / h_odds_no)
+        arb_profit_no = (1.0 / arb_cost_no) - 1.0 if arb_cost_no < 1.0 else -1.0
 
-        # Pick whichever side has the larger edge (if any)
-        candidates = [(er_yes, True), (er_no, False)]
-        best_er, bet_yes = max(
-            ((er, by) for er, by in candidates if er and er.edge_pct >= threshold),
-            key=lambda x: x[0].edge_pct,
-            default=(None, True),
-        )
-        if best_er is None:
+        # Choose the best arbitrage opportunity
+        if arb_profit_yes > arb_profit_no and arb_profit_yes >= threshold:
+            bet_yes = True
+            entry_price = p_yes
+            hedge_odds = h_odds_yes
+            arb_profit = arb_profit_yes
+            fair_val = fh if match.team_is_home else fa
+        elif arb_profit_no >= threshold:
+            bet_yes = False
+            entry_price = p_no
+            hedge_odds = h_odds_no
+            arb_profit = arb_profit_no
+            fair_val = fa if match.team_is_home else fh
+        else:
             continue
 
-        # For NO bets, the "poly price" is the NO token price
-        entry_price = market.price_yes if bet_yes else price_no
-        # team_yes bets YES on team_yes winning; NO bet means betting team_no wins
+        # Use arb_profit as the 'edge' for Kelly to keep it consistent
+        size, frac = quarter_kelly_size(arb_profit, fair_val, bankroll)
+        
+        # Final safety check: if entry_price is too low or high, kelly might get wild
+        if entry_price < 0.01: continue
+
+        hedge_size = (size / entry_price) / hedge_odds
+        
         t1 = market.team_yes if bet_yes == match.team_is_home else market.team_no
         t2 = market.team_no  if bet_yes == match.team_is_home else market.team_yes
         bet_side = "YES" if bet_yes else "NO"
 
-        size, frac = quarter_kelly_size(best_er.edge_pct, best_er.fair_value, bankroll)
-        # Arbitrage Hedge Calculation
-        if bet_yes:
-            # We bought YES on Poly (team1 winning). Hedge on team2 winning.
-            hedge_odds = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
-        else:
-            # We bought NO on Poly (team2 winning). Hedge on team1 winning.
-            hedge_odds = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
-
-        # STRICT ARBITRAGE CHECK:
-        # P = entry_price, O = hedge_odds
-        # Profit exists if P + 1/O < 1.0
-        hedge_cost_pct = 1.0 / hedge_odds
-        if (entry_price + hedge_cost_pct) >= 1.0:
-            continue
-
-        # H = (size / entry_price) / hedge_odds
-        hedge_size = (size / entry_price) / hedge_odds
-
         sig = Signal(
             timestamp=now, sport=market.sport, league=league,
             team1=t1, team2=t2,
-            game_date=market.game_date, edge_pct=best_er.edge_pct,
+            game_date=market.game_date, edge_pct=round(arb_profit, 4),
             poly_price=entry_price, poly_market_id=market.market_id,
-            fair_value=best_er.fair_value, kelly_fraction=frac, suggested_size=size,
+            fair_value=round(fair_val, 4), kelly_fraction=frac, suggested_size=size,
             sources_used=f"{sources}:{bet_side}",
-            hedge_odds=hedge_odds, hedge_size=round(hedge_size, 2)
+            hedge_odds=round(hedge_odds, 4), hedge_size=round(hedge_size, 2)
         )
         insert_signal(conn, sig)
         signals.append(sig)

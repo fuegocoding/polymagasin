@@ -21,8 +21,8 @@ _LEAGUES: dict[str, list[int]] = {
 
 def _to_decimal(american: float) -> float:
     if american > 0:
-        return american / 100.0 + 1.0
-    return 100.0 / abs(american) + 1.0
+        return round(american / 100.0 + 1.0, 4)
+    return round(100.0 / abs(american) + 1.0, 4)
 
 
 class PinnacleFetcher(BaseFetcher):
