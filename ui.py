@@ -141,7 +141,7 @@ with tab_live:
                 "ROI %": "{:.2f}%"
             }).map(lambda x: "color: #00ff88; font-weight: bold;" if isinstance(x, (int, float)) and x > 0 else "", 
                    subset=["Locked Profit", "ROI %"]),
-            use_container_width=True, 
+            width="stretch", 
             hide_index=True
         )
         st.success(f"📈 **Consolidated Guaranteed Return: ${unrealized_locked_profit:,.2f}**")
@@ -175,7 +175,7 @@ with tab_analytics:
                 paper_bgcolor='rgba(0,0,0,0)',
                 height=400
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_stats:
             st.subheader("Profit Mix")
@@ -184,7 +184,7 @@ with tab_analytics:
                 fig_pie = px.sunburst(pnl_data, path=['Sport'], values='Profit',
                                      color='Profit', color_continuous_scale='Viridis')
                 fig_pie.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=0, b=0))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width="stretch")
             else:
                 st.info("No resolved trade data.")
 
@@ -220,7 +220,7 @@ with tab_ledger:
                 "Sharp Odds": s['hedge_odds']
             })
         df_ledger = pd.DataFrame(ledger_rows)
-        st.dataframe(df_ledger, use_container_width=True, hide_index=True)
+        st.dataframe(df_ledger, width="stretch", hide_index=True)
     else:
         st.info("Transaction ledger is currently empty.")
 
