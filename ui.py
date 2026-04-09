@@ -31,6 +31,10 @@ st.markdown("""
 # Auto-refresh every 30 seconds
 st_autorefresh(interval=30_000, key="autorefresh")
 
+def get_db_conn():
+    cfg = load_config()
+    return init_db(cfg.db_path)
+
 @st.cache_data(ttl=5)
 def load_full_data():
     cfg = load_config()
@@ -43,9 +47,10 @@ def load_full_data():
     history_df = pd.read_sql("SELECT * FROM bankroll_history ORDER BY timestamp ASC", conn)
     history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
     
-    return cfg, conn, signals, pnl_sport, bankroll, history_df
+    return cfg, signals, pnl_sport, bankroll, history_df
 
-cfg, conn, signals, pnl_sport, bankroll, history_df = load_full_data()
+cfg, signals, pnl_sport, bankroll, history_df = load_full_data()
+conn = get_db_conn() # for settings updates
 
 # ── Metrics ──────────────────────────────────────────────────────────────────
 pending   = [s for s in signals if s.status == "pending"]
