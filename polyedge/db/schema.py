@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS scan_logs (
 )"""
 
 def init_db(path: str) -> sqlite3.Connection:
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute(_CREATE_SIGNALS)

@@ -19,8 +19,11 @@ class PolymarketFetcher:
 
     async def fetch(self, sports: list[str]) -> list[PolyMarket]:
         events = await self._fetch_all_events()
+        from rich.console import Console as _C; _c = _C()
+        _c.print(f"[dim][Polymarket] {len(events)} total events fetched[/dim]")
         markets = []
         for sport in sports:
+            sport_matches = 0
             for event in events:
                 ticker = event.get("ticker", "").lower()
                 slug = event.get("slug", "").lower()
@@ -37,10 +40,12 @@ class PolymarketFetcher:
                 if not is_match:
                     continue
 
+                sport_matches += 1
                 for market in event.get("markets", []):
                     p = self._parse(event, market, sport)
                     if p:
                         markets.append(p)
+            _c.print(f"[dim][Polymarket] {sport}: {sport_matches} events matched[/dim]")
         return markets
 
     async def _fetch_all_events(self) -> list[dict]:

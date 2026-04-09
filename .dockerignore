@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+tests/
+requirements-dev.txt
+*.db
+*.log
+*.pid
+NUL
+docs/
+.env

@@ -16,7 +16,7 @@ from polyedge.fetchers.polymarket import PolymarketFetcher
 from polyedge.fetchers.pinnacle import PinnacleFetcher
 from polyedge.fetchers.stake import StakeFetcher
 from polyedge.fetchers.miseonjeu import MiseonjeuFetcher
-from polyedge.scanner import run_scan
+from polyedge.scanner import run_scan, auto_resolve, revalidate_pending
 from polyedge.cli.display import (
     print_signals_table,
     print_pnl_table,
@@ -50,11 +50,24 @@ def watch(config: str = typer.Option("config.toml")):
     )
 
     async def on_update(markets, odds):
-        # Triggered whenever new WS data arrives
+        import time as _time
+        t0 = _time.monotonic()
+        # 1. Auto-resolve settled markets
+        resolved = auto_resolve(conn, markets)
+        for sig, outcome, price in resolved:
+            color = "green" if outcome == "won" else "red"
+            pnl = sig.suggested_size * (1.0 / sig.poly_price - 1.0) if outcome == "won" else -sig.suggested_size
+            console.print(f"[{color}]RESOLVED [{sig.id}] {sig.team1} vs {sig.team2} → {outcome.upper()} @ {price:.3f} | P&L: {pnl:+.2f}[/{color}]")
+        # 2. Revalidate pending signals — cancel if edge no longer exists
+        cancelled = revalidate_pending(conn, markets, odds, cfg)
+        for sig, cur_price, cur_edge in cancelled:
+            console.print(f"[yellow]CANCELLED [{sig.id}] {sig.team1} vs {sig.team2} — edge gone (entry={sig.poly_price:.3f} → now={cur_price:.3f}, edge={cur_edge*100:.1f}%)[/yellow]")
+        # 3. Scan for new signals
         sigs = await run_scan(markets, odds, cfg, conn)
-        if sigs:
-            print_signals_table(sigs)
-            log_scan(conn, len(markets), len(sigs), ["websocket"], 0)
+        ms = int((_time.monotonic() - t0) * 1000)
+        print_signals_table(sigs)
+        print_scan_summary(len(sigs), len(markets), [f"odds:{len(odds)}"], ms)
+        log_scan(conn, len(markets), len(sigs), ["websocket"], ms)
 
     manager = WebSocketManager(cfg, conn, on_update)
 

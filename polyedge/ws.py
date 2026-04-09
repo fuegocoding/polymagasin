@@ -34,6 +34,7 @@ class WebSocketManager:
         self.odds = {}  # (Source, Match ID) -> OddsLine
         self._tasks = []
         self._client = None
+        self._debounce_task: asyncio.Task | None = None
 
     async def start(self):
         console.print("[cyan]Starting Real-Time Data Manager...[/cyan]")
@@ -77,8 +78,9 @@ class WebSocketManager:
         while True:
             try:
                 markets = await fetcher.fetch(self.config.sports)
-                for m in markets:
-                    self.markets[m.market_id] = m
+                # Replace markets dict on each poll so closed markets don't linger
+                self.markets = {m.market_id: m for m in markets}
+                console.print(f"[cyan][Polymarket] {len(markets)} active markets[/cyan]")
                 await self._trigger_update()
             except Exception as e:
                 console.print(f"[red][Polymarket] Error: {e}[/red]")
@@ -90,17 +92,24 @@ class WebSocketManager:
             try:
                 lines = await fetcher.fetch(self.config.sports)
                 for l in lines:
-                    # Create a unique key per match
                     key = (name, l.sport, l.team1, l.team2, l.game_date.date())
                     self.odds[key] = l
+                console.print(f"[cyan][{name}] {len(lines)} odds lines[/cyan]")
                 await self._trigger_update()
             except Exception as e:
                 console.print(f"[red][{name}] Error: {e}[/red]")
             await asyncio.sleep(self.config.scanner.scan_interval_minutes * 60)
 
     async def _trigger_update(self):
-        # Fire callback with current state
-        if self.markets and self.odds:
+        # Debounce: cancel any pending delayed call and schedule a new one.
+        # This collapses rapid-fire updates from multiple sources into a single scan.
+        if self._debounce_task and not self._debounce_task.done():
+            self._debounce_task.cancel()
+        self._debounce_task = asyncio.create_task(self._delayed_update())
+
+    async def _delayed_update(self):
+        await asyncio.sleep(3)  # wait 3s to collect updates from all sources
+        if self.markets:
             await self.on_update(list(self.markets.values()), list(self.odds.values()))
 
     def stop(self):

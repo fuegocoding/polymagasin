@@ -1,11 +1,16 @@
 from __future__ import annotations
+import asyncio
 from datetime import datetime, timezone
 import httpx
 from polyedge.fetchers.base import BaseFetcher
 from polyedge.models import OddsLine
 from polyedge.matching.normalizer import normalize_team
 
-_BASE = "https://www.pinnacle.com/api/v3"
+_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
 _LEAGUES: dict[str, list[int]] = {
     "nba": [487],
     "nhl": [1456],
@@ -14,68 +19,77 @@ _LEAGUES: dict[str, list[int]] = {
 }
 
 
+def _to_decimal(american: float) -> float:
+    if american > 0:
+        return american / 100.0 + 1.0
+    return 100.0 / abs(american) + 1.0
+
+
 class PinnacleFetcher(BaseFetcher):
     def __init__(self, client: httpx.AsyncClient, api_key: str = ""):
         super().__init__(client)
         self.api_key = api_key
 
     async def fetch(self, sports: list[str]) -> list[OddsLine]:
-        ids, by_lid = [], {}
+        tasks = []
+        sport_for_lid: dict[int, str] = {}
         for s in sports:
             for lid in _LEAGUES.get(s.lower(), []):
-                ids.append(lid)
-                by_lid[lid] = s.lower()
-        if not ids:
+                sport_for_lid[lid] = s.lower()
+                tasks.append(self._fetch_league(lid))
+        if not tasks:
             return []
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out = []
+        for lid, res in zip(sport_for_lid.keys(), results):
+            if isinstance(res, Exception):
+                print(f"[pinnacle] league {lid} error: {res}")
+            else:
+                sport = sport_for_lid[lid]
+                out.extend(self._parse_league(res[0], res[1], sport))
+        return out
 
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Basic {self.api_key}"
+    async def _fetch_league(self, league_id: int):
+        matchups, markets = await asyncio.gather(
+            self._get_json(f"{_BASE}/leagues/{league_id}/matchups", headers=_HEADERS),
+            self._get_json(f"{_BASE}/leagues/{league_id}/markets/straight", headers=_HEADERS),
+        )
+        return matchups, markets
 
-        data = await self._get_json(
-            f"{_BASE}/matchups",
-            params={
-                "leagueIds": ",".join(str(i) for i in ids),
-                "withSpecials": "false",
-                "brandId": "1",
-            },
-            headers=headers,
-        )
-        return [
-            l for m in data.get("matchups", []) for l in [self._parse(m, by_lid)] if l
-        ]
+    def _parse_league(self, matchups: list, markets: list, sport: str) -> list[OddsLine]:
+        # Build moneyline index (period 0, not alternate) keyed by matchupId
+        ml: dict[int, dict] = {}
+        for m in markets:
+            if m.get("type") == "moneyline" and m.get("period") == 0 and not m.get("isAlternate"):
+                ml[m["matchupId"]] = m
 
-    def _parse(self, m, by_lid) -> OddsLine | None:
-        sport = by_lid.get(m.get("league", {}).get("id"))
-        if not sport:
-            return None
-        ml = next(
-            (
-                p["moneyline"]
-                for p in m.get("periods", [])
-                if p.get("number") == 0 and "moneyline" in p
-            ),
-            None,
-        )
-        if not ml:
-            return None
-        parts = m.get("participants", [])
-        home = next((p["name"] for p in parts if p.get("alignment") == "home"), None)
-        away = next((p["name"] for p in parts if p.get("alignment") == "away"), None)
-        if not home or not away:
-            return None
-        try:
-            gd = datetime.fromisoformat(m["startTime"].replace("Z", "+00:00"))
-        except Exception:
-            return None
-        return OddsLine(
-            "pinnacle",
-            sport,
-            m.get("league", {}).get("name", sport.upper()),
-            normalize_team(home, sport),
-            normalize_team(away, sport),
-            gd,
-            float(ml["home"]),
-            float(ml["away"]),
-            datetime.now(timezone.utc),
-        )
+        lines = []
+        for mu in matchups:
+            mid = mu.get("id")
+            if mid not in ml:
+                continue
+            parts = mu.get("participants", [])
+            home = next((p["name"] for p in parts if p.get("alignment") == "home"), None)
+            away = next((p["name"] for p in parts if p.get("alignment") == "away"), None)
+            if not home or not away:
+                continue
+            try:
+                gd = datetime.fromisoformat(mu["startTime"].replace("Z", "+00:00"))
+            except Exception:
+                continue
+            prices = ml[mid].get("prices", [])
+            hp = next((p["price"] for p in prices if p.get("designation") == "home"), None)
+            ap = next((p["price"] for p in prices if p.get("designation") == "away"), None)
+            if hp is None or ap is None:
+                continue
+            league_name = mu.get("league", {}).get("name", sport.upper())
+            lines.append(OddsLine(
+                "pinnacle", sport, league_name,
+                normalize_team(home, sport),
+                normalize_team(away, sport),
+                gd,
+                _to_decimal(hp),
+                _to_decimal(ap),
+                datetime.now(timezone.utc),
+            ))
+        return lines

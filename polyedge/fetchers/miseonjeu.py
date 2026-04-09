@@ -40,17 +40,19 @@ class MiseonjeuFetcher(BaseFetcher):
         url = f"{_BASE}/listView/{path}.json"
         for i in range(3):
             try:
-                headers = {}
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
-                # Sometimes user-agent helps bypass basic blocks if unauthenticated
-                headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 r = await self.client.get(
                     url,
                     params={"lang": "fr_CA", "market": "CA"},
                     timeout=15.0,
                     headers=headers,
                 )
+                if r.status_code == 429:
+                    wait = int(r.headers.get("Retry-After", 60 * (i + 1)))
+                    await asyncio.sleep(wait)
+                    continue
                 r.raise_for_status()
                 return self._parse_response(r.json(), sport)
             except Exception as e:
