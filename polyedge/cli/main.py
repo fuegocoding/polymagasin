@@ -11,6 +11,7 @@ from polyedge.db.signals import (
     resolve_signal,
     get_signal_by_id,
     log_scan,
+    get_bankroll,
 )
 from polyedge.fetchers.polymarket import PolymarketFetcher
 from polyedge.fetchers.pinnacle import PinnacleFetcher
@@ -56,8 +57,8 @@ def watch(config: str = typer.Option("config.toml")):
         resolved = auto_resolve(conn, markets)
         for sig, outcome, price in resolved:
             color = "green" if outcome == "won" else "red"
-            pnl = sig.suggested_size * (1.0 / sig.poly_price - 1.0) if outcome == "won" else -sig.suggested_size
-            console.print(f"[{color}]RESOLVED [{sig.id}] {sig.team1} vs {sig.team2} → {outcome.upper()} @ {price:.3f} | P&L: {pnl:+.2f}[/{color}]")
+            balance = get_bankroll(conn)
+            console.print(f"[{color}]RESOLVED [{sig.id}] {sig.team1} vs {sig.team2} → {outcome.upper()} @ {price:.3f} | P&L: {sig.pnl:+.2f} | Bankroll: ${balance:.2f}[/{color}]")
         # 2. Revalidate pending signals — cancel if edge no longer exists
         cancelled = revalidate_pending(conn, markets, odds, cfg)
         for sig, cur_price, cur_edge in cancelled:
@@ -99,10 +100,8 @@ def pnl(config: str = typer.Option("config.toml")):
     """P&L summary by sport."""
     _, conn = _load(config)
     by_sport = get_pnl_by_sport(conn)
-    if not by_sport:
-        console.print("[yellow]No resolved signals yet.[/yellow]")
-        return
-    print_pnl_table(by_sport, sum(by_sport.values()))
+    balance = get_bankroll(conn)
+    print_pnl_table(by_sport, sum(by_sport.values()), balance)
 
 
 @app.command()
@@ -119,8 +118,9 @@ def resolve(
     _, conn = _load(config)
     resolve_signal(conn, signal_id, outcome, outcome_price)
     s = get_signal_by_id(conn, signal_id)
+    balance = get_bankroll(conn)
     c = "green" if s.pnl >= 0 else "red"
-    console.print(f"Signal {signal_id} -> {outcome} | P&L: [{c}]{s.pnl:+.2f}[/{c}]")
+    console.print(f"Signal {signal_id} -> {outcome} | P&L: [{c}]{s.pnl:+.2f}[/{c}] | Bankroll: ${balance:.2f}")
 
 
 async def _do_scan(cfg_path: str) -> None:

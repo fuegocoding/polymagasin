@@ -41,6 +41,8 @@ class Signal:
     kelly_fraction: float
     suggested_size: float
     sources_used: str
+    hedge_odds: float | None = None
+    hedge_size: float | None = None
     status: str = "pending"
     outcome_price: float | None = None
     pnl: float | None = None

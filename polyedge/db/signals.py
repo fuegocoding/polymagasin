@@ -36,10 +36,20 @@ def get_signals(conn, sport=None, min_edge=0.0, status=None) -> list[Signal]:
 
 def resolve_signal(conn, sid: int, status: str, outcome_price: float) -> None:
     s = get_signal_by_id(conn, sid)
-    pnl = (s.suggested_size * (1.0 / s.poly_price - 1.0) if status == "won"
-           else -s.suggested_size if status == "lost" else 0.0)
+    if status == "won":
+        poly_pnl = s.suggested_size * (1.0 / s.poly_price - 1.0)
+        hedge_pnl = -s.hedge_size if s.hedge_size else 0.0
+    elif status == "lost":
+        poly_pnl = -s.suggested_size
+        hedge_pnl = s.hedge_size * (s.hedge_odds - 1.0) if s.hedge_size and s.hedge_odds else 0.0
+    else: # push
+        poly_pnl = 0.0
+        hedge_pnl = 0.0
+    
+    total_pnl = poly_pnl + hedge_pnl
     conn.execute("UPDATE signals SET status=?,outcome_price=?,pnl=? WHERE id=?",
-                 (status, outcome_price, pnl, sid))
+                 (status, outcome_price, total_pnl, sid))
+    update_bankroll(conn, total_pnl, f"Signal {sid} resolved as {status}")
     conn.commit()
 
 def get_pnl_by_sport(conn) -> dict[str, float]:
@@ -66,6 +76,9 @@ def _row(row: sqlite3.Row) -> Signal:
         edge_pct=row["edge_pct"], poly_price=row["poly_price"],
         poly_market_id=row["poly_market_id"], fair_value=row["fair_value"],
         kelly_fraction=row["kelly_fraction"], suggested_size=row["suggested_size"],
+        sources_used=row["sources_used"], status=row["status"],
+        outcome_price=row["outcome_price"], pnl=row["pnl"],
+    )raction=row["kelly_fraction"], suggested_size=row["suggested_size"],
         sources_used=row["sources_used"], status=row["status"],
         outcome_price=row["outcome_price"], pnl=row["pnl"],
     )

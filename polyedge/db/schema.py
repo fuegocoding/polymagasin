@@ -31,6 +31,22 @@ CREATE TABLE IF NOT EXISTS scan_logs (
     duration_ms      INTEGER NOT NULL
 )"""
 
+_CREATE_BANKROLL = """
+CREATE TABLE IF NOT EXISTS bankroll (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    balance     REAL NOT NULL,
+    updated_at  TEXT NOT NULL
+)"""
+
+_CREATE_BANKROLL_HISTORY = """
+CREATE TABLE IF NOT EXISTS bankroll_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    balance     REAL NOT NULL,
+    change      REAL NOT NULL,
+    reason      TEXT
+)"""
+
 def init_db(path: str) -> sqlite3.Connection:
     import os
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -38,5 +54,9 @@ def init_db(path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute(_CREATE_SIGNALS)
     conn.execute(_CREATE_SCAN_LOGS)
+    conn.execute(_CREATE_BANKROLL)
+    conn.execute(_CREATE_BANKROLL_HISTORY)
+    # Initialize bankroll if empty
+    conn.execute("INSERT OR IGNORE INTO bankroll (id, balance, updated_at) VALUES (1, 1000.0, datetime('now'))")
     conn.commit()
     return conn

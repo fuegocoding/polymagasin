@@ -6,7 +6,7 @@ from polyedge.models import OddsLine, PolyMarket, Signal
 from polyedge.matching.matcher import find_matching_odds
 from polyedge.edge.calculator import devig, calculate_edge, average_fair_values
 from polyedge.edge.kelly import quarter_kelly_size
-from polyedge.db.signals import insert_signal, get_signals, resolve_signal
+from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll
 
 def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     """Resolve pending signals where Polymarket price has settled (>0.95 or <0.05)."""
@@ -84,7 +84,7 @@ def revalidate_pending(conn, poly_markets: list, odds_lines: list, config: Confi
 
 async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signal]:
     threshold = config.scanner.edge_threshold
-    bankroll = config.scanner.bankroll
+    bankroll = get_bankroll(conn)
     stale = timedelta(minutes=config.scanner.stale_odds_minutes)
     now = datetime.now(timezone.utc)
 
@@ -136,6 +136,17 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         bet_side = "YES" if bet_yes else "NO"
 
         size, frac = quarter_kelly_size(best_er.edge_pct, best_er.fair_value, bankroll)
+        
+        # Arbitrage Hedge Calculation
+        if bet_yes:
+            # Bought YES on Poly (team1). Hedge on team2.
+            hedge_odds = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
+        else:
+            # Bought NO on Poly (team2). Hedge on team1.
+            hedge_odds = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
+        
+        hedge_size = (size / entry_price) / hedge_odds
+
         sig = Signal(
             timestamp=now, sport=market.sport, league=league,
             team1=t1, team2=t2,
@@ -143,6 +154,7 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
             poly_price=entry_price, poly_market_id=market.market_id,
             fair_value=best_er.fair_value, kelly_fraction=frac, suggested_size=size,
             sources_used=f"{sources}:{bet_side}",
+            hedge_odds=hedge_odds, hedge_size=round(hedge_size, 2)
         )
         insert_signal(conn, sig)
         signals.append(sig)
