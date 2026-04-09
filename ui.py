@@ -117,18 +117,30 @@ with tab_ops:
             locked_profit = (s['suggested_size'] / s['poly_price']) - total_cost if s['poly_price'] > 0 else 0
             profit_margin = (locked_profit / total_cost * 100) if total_cost > 0 else 0
             
+            # Age calculation
+            age_td = datetime.now(timezone.utc) - s['timestamp'].replace(tzinfo=timezone.utc)
+            age_str = f"{int(age_td.total_seconds() // 60)}m {int(age_td.total_seconds() % 60)}s"
+
             rows.append({
                 "Matchup": f"{s['team1']} vs {s['team2']}",
                 "Sport": s['sport'].upper(),
                 "Poly Buy": f"{poly_side} ${s['suggested_size']:.2f} @ {s['poly_price']:.3f}",
                 "Sharp Hedge": f"${s['hedge_size'] or 0:.2f} @ {s['hedge_odds']:.3f}",
                 "Total Cost": f"${total_cost:.2f}",
-                "Locked Profit": f"${locked_profit:.2f}",
-                "ROI %": f"{profit_margin:.2f}%",
-                "Logged": s['timestamp'].strftime("%H:%M:%S")
+                "Profit": locked_profit,
+                "ROI %": profit_margin,
+                "Age": age_str
             })
         
-        st.table(pd.DataFrame(rows))
+        df_ops = pd.DataFrame(rows)
+        st.dataframe(
+            df_ops.style.format({
+                "Profit": "${:.2f}",
+                "ROI %": "{:.2f}%"
+            }).map(lambda x: "color: #00ff88; font-weight: bold;" if isinstance(x, (int, float)) and x > 0 else "", subset=["Profit", "ROI %"]),
+            use_container_width=True, 
+            hide_index=True
+        )
         
         total_profit_locked = sum((s['suggested_size'] / s['poly_price']) - (s['suggested_size'] + (s['hedge_size'] or 0)) 
                                   for s in pending if s['poly_price'] > 0)
