@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS signals (
     sources_used    TEXT NOT NULL,
     hedge_odds      REAL,
     hedge_size      REAL,
+    arb_profit      REAL,
+    hedge_cost_pct  REAL,
     status          TEXT NOT NULL DEFAULT 'pending',
     outcome_price   REAL,
     pnl             REAL

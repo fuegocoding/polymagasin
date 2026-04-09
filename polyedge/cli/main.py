@@ -17,7 +17,7 @@ from polyedge.fetchers.polymarket import PolymarketFetcher
 from polyedge.fetchers.pinnacle import PinnacleFetcher
 from polyedge.fetchers.stake import StakeFetcher
 from polyedge.fetchers.miseonjeu import MiseonjeuFetcher
-from polyedge.scanner import run_scan, auto_resolve, revalidate_pending
+from polyedge.scanner import run_scan, auto_resolve
 from polyedge.cli.display import (
     print_signals_table,
     print_pnl_table,
@@ -59,11 +59,8 @@ def watch(config: str = typer.Option("config.toml")):
             color = "green" if outcome == "won" else "red"
             balance = get_bankroll(conn)
             console.print(f"[{color}]RESOLVED [{sig.id}] {sig.team1} vs {sig.team2} → {outcome.upper()} @ {price:.3f} | P&L: {sig.pnl:+.2f} | Bankroll: ${balance:.2f}[/{color}]")
-        # 2. Revalidate pending signals — cancel if edge no longer exists
-        cancelled = revalidate_pending(conn, markets, odds, cfg)
-        for sig, cur_price, cur_edge in cancelled:
-            console.print(f"[yellow]CANCELLED [{sig.id}] {sig.team1} vs {sig.team2} — edge gone (entry={sig.poly_price:.3f} → now={cur_price:.3f}, edge={cur_edge*100:.1f}%)[/yellow]")
-        # 3. Scan for new signals
+        
+        # 2. Scan for new signals
         sigs = await run_scan(markets, odds, cfg, conn)
         ms = int((_time.monotonic() - t0) * 1000)
         print_signals_table(sigs)

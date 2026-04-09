@@ -7,13 +7,15 @@ def insert_signal(conn: sqlite3.Connection, signal: Signal) -> int:
     cur = conn.execute(
         """INSERT INTO signals
            (timestamp,sport,league,team1,team2,game_date,edge_pct,poly_price,
-            poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status,hedge_odds,hedge_size)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status,
+            hedge_odds,hedge_size,arb_profit,hedge_cost_pct)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (signal.timestamp.isoformat(), signal.sport, signal.league,
          signal.team1, signal.team2, signal.game_date.isoformat(),
          signal.edge_pct, signal.poly_price, signal.poly_market_id,
          signal.fair_value, signal.kelly_fraction, signal.suggested_size,
-         signal.sources_used, signal.status, signal.hedge_odds, signal.hedge_size),
+         signal.sources_used, signal.status, 
+         signal.hedge_odds, signal.hedge_size, signal.arb_profit, signal.hedge_cost_pct),
     )
     conn.commit()
     return cur.lastrowid
@@ -55,14 +57,15 @@ def resolve_signal(conn, sid: int, status: str, outcome_price: float) -> None:
     elif status == "lost":
         poly_pnl = -s.suggested_size
         hedge_pnl = s.hedge_size * (s.hedge_odds - 1.0) if s.hedge_size and s.hedge_odds else 0.0
-    else: # push
+    else: # push / cancelled
         poly_pnl = 0.0
         hedge_pnl = 0.0
     
     total_pnl = poly_pnl + hedge_pnl
     conn.execute("UPDATE signals SET status=?,outcome_price=?,pnl=? WHERE id=?",
                  (status, outcome_price, total_pnl, sid))
-    update_bankroll(conn, total_pnl, f"Signal {sid} resolved as {status}")
+    if status in ("won", "lost"):
+        update_bankroll(conn, total_pnl, f"Signal {sid} resolved as {status}")
     conn.commit()
 
 def get_pnl_by_sport(conn) -> dict[str, float]:
@@ -91,5 +94,6 @@ def _row(row: sqlite3.Row) -> Signal:
         kelly_fraction=row["kelly_fraction"], suggested_size=row["suggested_size"],
         sources_used=row["sources_used"], status=row["status"],
         outcome_price=row["outcome_price"], pnl=row["pnl"],
-        hedge_odds=row["hedge_odds"], hedge_size=row["hedge_size"]
+        hedge_odds=row["hedge_odds"], hedge_size=row["hedge_size"],
+        arb_profit=row.get("arb_profit"), hedge_cost_pct=row.get("hedge_cost_pct")
     )

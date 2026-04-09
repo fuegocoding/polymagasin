@@ -206,10 +206,12 @@ with tab_ledger:
     st.subheader("Complete Transaction History")
     all_history = sorted(signals_list, key=lambda x: x['timestamp'], reverse=True)
     if all_history:
+        # Display ledger first
         ledger_rows = []
         for s in all_history:
             status_color = "🟢" if s['status'] == "won" else ("🔴" if s['status'] == "lost" else ("⚪" if s['status'] == "pending" else "✖️"))
             ledger_rows.append({
+                "ID": s['id'],
                 "Time": s['timestamp'].strftime("%Y-%m-%d %H:%M"),
                 "Result": f"{status_color} {s['status'].upper()}",
                 "Sport": s['sport'].upper(),
@@ -219,8 +221,24 @@ with tab_ledger:
                 "Poly Price": s['poly_price'],
                 "Sharp Odds": s['hedge_odds']
             })
-        df_ledger = pd.DataFrame(ledger_rows)
-        st.dataframe(df_ledger, width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(ledger_rows), width="stretch", hide_index=True)
+        
+        # Add manual settlement tools for pending trades
+        pending_for_manual = [s for s in signals_list if s['status'] == "pending"]
+        if pending_for_manual:
+            with st.expander("🛠️ Manual Settlement Tool"):
+                st.info("Manually settle a trade if auto-resolve fails or price data is stale.")
+                col_id, col_res, col_go = st.columns([1, 2, 1])
+                target_id = col_id.selectbox("Select Signal ID", [s['id'] for s in pending_for_manual])
+                outcome = col_res.selectbox("Outcome", ["WON", "LOST", "PUSH"])
+                if col_go.button("Force Settle"):
+                    conn = get_db_conn()
+                    from polyedge.db.signals import resolve_signal
+                    # For manual settlement, assume current price doesn't matter much or is entry
+                    target_sig = next(s for s in pending_for_manual if s['id'] == target_id)
+                    resolve_signal(conn, target_id, outcome.lower(), target_sig['poly_price'])
+                    st.success(f"Signal {target_id} manually settled as {outcome}")
+                    st.rerun()
     else:
         st.info("Transaction ledger is currently empty.")
 

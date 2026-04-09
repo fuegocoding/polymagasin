@@ -34,61 +34,6 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     return resolved
 
 
-def revalidate_pending(conn, poly_markets: list, odds_lines: list, config: Config) -> list[tuple]:
-    """
-    For each pending signal, check if the edge is still positive at current prices.
-    Cancel signals whose edge has gone negative (price moved against us).
-    Returns list of (signal, current_price, current_edge) for all still-valid signals.
-    """
-    price_map = {m.market_id: m for m in poly_markets}
-    pending = get_signals(conn, status="pending")
-    stale = timedelta(minutes=config.scanner.stale_odds_minutes)
-    now = datetime.now(timezone.utc)
-
-    def _tz(dt):
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-    fresh = [l for l in odds_lines if (now - _tz(l.fetched_at)) <= stale]
-
-    cancelled = []
-    for sig in pending:
-        market = price_map.get(sig.poly_market_id)
-        if market is None:
-            continue  
-        if not fresh:
-            continue
-        # Grace period: 2 mins
-        if (now - _tz(sig.timestamp)) < timedelta(minutes=2):
-            continue
-
-        match = find_matching_odds(market, fresh)
-        if not match:
-            continue
-
-        pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
-        fh, fa = average_fair_values(pairs)
-        bet_yes = not sig.sources_used.endswith(":NO")
-        
-        # Current entry price
-        current_price = market.price_yes if bet_yes else (1.0 - market.price_yes)
-        
-        # Best current hedge odds
-        if bet_yes:
-            hedge_odds = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
-        else:
-            hedge_odds = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
-            
-        # Is it still a profitable arb?
-        arb_cost = current_price + (1.0 / hedge_odds)
-        if arb_cost >= 1.0:
-            conn.execute("UPDATE signals SET status='cancelled',outcome_price=? WHERE id=?",
-                         (current_price, sig.id))
-            conn.commit()
-            cancelled.append((sig, current_price, 1.0 - arb_cost))
-
-    return cancelled
-
-
 async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signal]:
     threshold = config.scanner.edge_threshold
     bankroll = get_bankroll(conn)
@@ -169,7 +114,8 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
             poly_price=entry_price, poly_market_id=market.market_id,
             fair_value=round(fair_val, 4), kelly_fraction=frac, suggested_size=size,
             sources_used=f"{sources}:{bet_side}",
-            hedge_odds=round(hedge_odds, 4), hedge_size=round(hedge_size, 2)
+            hedge_odds=round(hedge_odds, 4), hedge_size=round(hedge_size, 2),
+            arb_profit=round(arb_profit, 4), hedge_cost_pct=round(1.0/hedge_odds, 4)
         )
         insert_signal(conn, sig)
         signals.append(sig)
