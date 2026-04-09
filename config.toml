@@ -9,7 +9,7 @@ enabled = [ "nba", "nhl", "mlb", "epl",]
 
 [sources]
 pinnacle = true
-stake = true
+stake = false
 miseonjeu = true
 
 [db]

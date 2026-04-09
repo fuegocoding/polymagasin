@@ -12,6 +12,11 @@ mkdir -p "$DATA_DIR"
 if [ ! -f "$CONFIG_PATH" ]; then
   echo "Seeding $CONFIG_PATH from bundled defaults..."
   cp /app/config.toml "$CONFIG_PATH"
+else
+  # If it exists, ensure it has the correct 'stake = false' if that's what the user wants,
+  # or at least notify. Better yet, let's not overwrite user settings but
+  # we could merge them. For now, we rely on the UI to toggle it.
+  echo "Using existing config at $CONFIG_PATH"
 fi
 
 echo "Scanner config: DB=$DB_PATH, CONFIG=$CONFIG_PATH"

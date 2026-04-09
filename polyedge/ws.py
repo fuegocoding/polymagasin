@@ -33,6 +33,7 @@ class WebSocketManager:
         self.markets = {}  # Market ID -> PolyMarket
         self.odds = {}  # (Source, Match ID) -> OddsLine
         self._tasks = []
+        self._managed_tasks: dict[str, asyncio.Task] = {}
         self._client = None
         self._debounce_task: asyncio.Task | None = None
 
@@ -42,36 +43,43 @@ class WebSocketManager:
             headers={"User-Agent": "PolyEdge/1.0"}, follow_redirects=True
         )
 
-        # Start individual background workers for each source
+        # Start Polymarket permanently
         self._tasks.append(asyncio.create_task(self._poll_polymarket()))
 
-        active_sources = [k for k, v in self.config.sources.items() if v]
-        if "pinnacle" in active_sources:
-            self._tasks.append(
-                asyncio.create_task(
-                    self._poll_sportsbook(
-                        "pinnacle", PinnacleFetcher, self.config.pinnacle_api_key
-                    )
+        while True:
+            # Check for config changes periodically
+            from polyedge.config import load_config
+            try:
+                # Reload config to detect source toggles from UI
+                self.config = load_config()
+            except Exception: pass
+            
+            active_sources = [k for k, v in self.config.sources.items() if v]
+            
+            # Start new tasks if enabled in config but not running
+            if "pinnacle" in active_sources and "pinnacle" not in self._managed_tasks:
+                self._managed_tasks["pinnacle"] = asyncio.create_task(
+                    self._poll_sportsbook("pinnacle", PinnacleFetcher, self.config.pinnacle_api_key)
                 )
-            )
-        if "stake" in active_sources:
-            self._tasks.append(
-                asyncio.create_task(
-                    self._poll_sportsbook(
-                        "stake", StakeFetcher, self.config.stake_api_key
-                    )
+            if "stake" in active_sources and "stake" not in self._managed_tasks:
+                self._managed_tasks["stake"] = asyncio.create_task(
+                    self._poll_sportsbook("stake", StakeFetcher, self.config.stake_api_key)
                 )
-            )
-        if "miseonjeu" in active_sources:
-            self._tasks.append(
-                asyncio.create_task(
-                    self._poll_sportsbook(
-                        "miseonjeu", MiseonjeuFetcher, self.config.miseonjeu_api_key
-                    )
+            if "miseonjeu" in active_sources and "miseonjeu" not in self._managed_tasks:
+                self._managed_tasks["miseonjeu"] = asyncio.create_task(
+                    self._poll_sportsbook("miseonjeu", MiseonjeuFetcher, self.config.miseonjeu_api_key)
                 )
-            )
+                
+            # Cancel tasks if disabled in config but currently running
+            to_stop = [name for name in self._managed_tasks if name not in active_sources]
+            for name in to_stop:
+                console.print(f"[yellow][system] Stopping source: {name}[/yellow]")
+                self._managed_tasks[name].cancel()
+                del self._managed_tasks[name]
+                # Cleanup related odds to prevent stale arb detection
+                self.odds = {k: v for k, v in self.odds.items() if k[0] != name}
 
-        await asyncio.gather(*self._tasks)
+            await asyncio.sleep(10) # check for config changes every 10s
 
     async def _poll_polymarket(self):
         fetcher = PolymarketFetcher(self._client)
@@ -111,7 +119,7 @@ class WebSocketManager:
 
     async def _delayed_update(self):
         try:
-            await asyncio.sleep(5)  # wait 5s
+            await asyncio.sleep(5)  # wait 5s to batch updates
             if self.markets:
                 await self.on_update(list(self.markets.values()), list(self.odds.values()))
         except asyncio.CancelledError:
@@ -123,6 +131,8 @@ class WebSocketManager:
 
     def stop(self):
         for task in self._tasks:
+            task.cancel()
+        for task in self._managed_tasks.values():
             task.cancel()
         if self._client:
             asyncio.create_task(self._client.aclose())

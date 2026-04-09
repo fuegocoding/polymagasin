@@ -251,9 +251,24 @@ with tab_config:
                     st.error(f"Config write failure: {ex}")
 
     with st.expander("📡 Source Management"):
-        st.info("Sources are managed via config.toml. Current status below:")
-        for src, active in config_dict['sources'].items():
-            status = "✅ ACTIVE" if active else "❌ DISABLED"
-            st.write(f"**{src.upper()}**: {status}")
+        st.info("Toggle data sources. Requires scanner restart to take effect.")
+        with st.form("source_toggle"):
+            # Get current states from config_dict
+            pinnacle_active = st.checkbox("Pinnacle (Arcadia)", value=config_dict['sources'].get("pinnacle", True))
+            stake_active = st.checkbox("Stake", value=config_dict['sources'].get("stake", False))
+            mise_active = st.checkbox("Mise-o-jeu", value=config_dict['sources'].get("miseonjeu", True))
+            
+            if st.form_submit_button("Update Sources"):
+                import os as _os
+                config_path = _os.getenv("CONFIG_PATH", "config.toml")
+                try:
+                    with open(config_path, "r") as f: data = toml.load(f)
+                    data.setdefault("sources", {})["pinnacle"] = pinnacle_active
+                    data["sources"]["stake"] = stake_active
+                    data["sources"]["miseonjeu"] = mise_active
+                    with open(config_path, "w") as f: toml.dump(data, f)
+                    st.success("Sources updated. Restarting the scanner recommended.")
+                except Exception as ex:
+                    st.error(f"Failed to update sources: {ex}")
 
 st.caption(f"PolyEdge Elite v2.3 | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
