@@ -102,12 +102,15 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
     pending = {s.poly_market_id for s in get_signals(conn, status="pending")}
     signals = []
 
+    matches_found = 0
     for market in poly_markets:
         if market.market_id in pending: continue
         if market.price_yes >= 0.95 or market.price_yes <= 0.05: continue
         
         match = find_matching_odds(market, fresh)
         if not match: continue
+        
+        matches_found += 1
             
         pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
         fh, fa = average_fair_values(pairs)
@@ -115,17 +118,21 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         league = match.matched_lines[0].league
 
         # Evaluate both sides for arbitrage potential
-        # 1. Try buying YES on Polymarket, hedging on Sharp
         p_yes = market.price_yes
         h_odds_yes = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
         arb_cost_yes = p_yes + (1.0 / h_odds_yes)
-        arb_profit_yes = (1.0 / arb_cost_yes) - 1.0 if arb_cost_yes < 1.0 else -1.0
+        arb_profit_yes = (1.0 / arb_cost_yes) - 1.0 if arb_cost_yes < 1.0 else (1.0 / arb_cost_yes) - 1.0
         
-        # 2. Try buying NO on Polymarket, hedging on Sharp
         p_no = 1.0 - market.price_yes
         h_odds_no = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
         arb_cost_no = p_no + (1.0 / h_odds_no)
-        arb_profit_no = (1.0 / arb_cost_no) - 1.0 if arb_cost_no < 1.0 else -1.0
+        arb_profit_no = (1.0 / arb_cost_no) - 1.0 if arb_cost_no < 1.0 else (1.0 / arb_cost_no) - 1.0
+
+        # Log close calls (within 2% of threshold)
+        best_profit = max(arb_profit_yes, arb_profit_no)
+        if best_profit >= (threshold - 0.02):
+            side = "YES" if arb_profit_yes > arb_profit_no else "NO"
+            print(f"[debug] {market.question} match found! Profit: {best_profit*100:.2f}% ({side})")
 
         # Choose the best arbitrage opportunity
         if arb_profit_yes > arb_profit_no and arb_profit_yes >= threshold:
@@ -166,4 +173,8 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         )
         insert_signal(conn, sig)
         signals.append(sig)
+    
+    if matches_found > 0:
+        print(f"[scanner] Finished. Found {matches_found} total matchup matches.")
+        
     return signals
