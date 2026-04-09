@@ -6,7 +6,7 @@ from polyedge.models import OddsLine, PolyMarket, Signal
 from polyedge.matching.matcher import find_matching_odds
 from polyedge.edge.calculator import devig, calculate_edge, average_fair_values
 from polyedge.edge.kelly import quarter_kelly_size
-from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll
+from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll, get_signal_by_id
 
 def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     """Resolve pending signals where Polymarket price has settled (>0.95 or <0.05)."""
@@ -24,11 +24,13 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
         if current_yes >= 0.95:
             outcome = "won" if bet_yes else "lost"
             resolve_signal(conn, sig.id, outcome, current_entry)
-            resolved.append((sig, outcome, current_entry))
+            updated_sig = get_signal_by_id(conn, sig.id)
+            resolved.append((updated_sig, outcome, current_entry))
         elif current_yes <= 0.05:
             outcome = "lost" if bet_yes else "won"
             resolve_signal(conn, sig.id, outcome, current_entry)
-            resolved.append((sig, outcome, current_entry))
+            updated_sig = get_signal_by_id(conn, sig.id)
+            resolved.append((updated_sig, outcome, current_entry))
     return resolved
 
 
@@ -108,9 +110,6 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         if not match:
             continue
             
-        # Log successful matches for visibility
-        # print(f"[match] {market.question} matched with {len(match.matched_lines)} lines from {match.matched_lines[0].source}")
-        
         pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
         fh, fa = average_fair_values(pairs)
         sources = ",".join(sorted({l.source for l in match.matched_lines}))
@@ -141,15 +140,22 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         bet_side = "YES" if bet_yes else "NO"
 
         size, frac = quarter_kelly_size(best_er.edge_pct, best_er.fair_value, bankroll)
-        
         # Arbitrage Hedge Calculation
         if bet_yes:
-            # Bought YES on Poly (team1). Hedge on team2.
+            # We bought YES on Poly (team1 winning). Hedge on team2 winning.
             hedge_odds = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
         else:
-            # Bought NO on Poly (team2). Hedge on team1.
+            # We bought NO on Poly (team2 winning). Hedge on team1 winning.
             hedge_odds = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
-        
+
+        # STRICT ARBITRAGE CHECK:
+        # P = entry_price, O = hedge_odds
+        # Profit exists if P + 1/O < 1.0
+        hedge_cost_pct = 1.0 / hedge_odds
+        if (entry_price + hedge_cost_pct) >= 1.0:
+            continue
+
+        # H = (size / entry_price) / hedge_odds
         hedge_size = (size / entry_price) / hedge_odds
 
         sig = Signal(
