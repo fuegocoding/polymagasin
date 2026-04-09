@@ -16,20 +16,39 @@ fi
 
 echo "Scanner config: DB=$DB_PATH, CONFIG=$CONFIG_PATH"
 
-# Start the edge scanner in the background (explicit config path so it reads from volume)
+# Start the edge scanner in the background
 python main.py watch --config "$CONFIG_PATH" &
 SCANNER_PID=$!
 
-# Start Streamlit on Railway's PORT (fallback 8501)
+# Start Streamlit
 streamlit run ui.py \
   --server.port="${PORT:-8501}" \
   --server.headless=true \
   --server.address=0.0.0.0 \
+  --server.enableCORS=false \
+  --server.enableXsrfProtection=false \
   --browser.gatherUsageStats=false &
 WEB_PID=$!
 
-# If either process dies, kill the other and exit
-wait -n $SCANNER_PID $WEB_PID
-echo "A process exited unexpectedly — shutting down."
-kill $SCANNER_PID $WEB_PID 2>/dev/null || true
-exit 1
+echo "Processes started: Scanner ($SCANNER_PID), Web ($WEB_PID)"
+
+# Monitor processes
+while true; do
+  if ! kill -0 $SCANNER_PID 2>/dev/null; then
+    echo "Scanner process died. Restarting..."
+    python main.py watch --config "$CONFIG_PATH" &
+    SCANNER_PID=$!
+  fi
+  if ! kill -0 $WEB_PID 2>/dev/null; then
+    echo "Web process died. Restarting..."
+    streamlit run ui.py \
+      --server.port="${PORT:-8501}" \
+      --server.headless=true \
+      --server.address=0.0.0.0 \
+      --server.enableCORS=false \
+      --server.enableXsrfProtection=false \
+      --browser.gatherUsageStats=false &
+    WEB_PID=$!
+  fi
+  sleep 10
+done

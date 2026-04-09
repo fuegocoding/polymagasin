@@ -105,7 +105,12 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         if market.price_yes >= 0.95 or market.price_yes <= 0.05:
             continue
         match = find_matching_odds(market, fresh)
-        if not match: continue
+        if not match:
+            continue
+            
+        # Log successful matches for visibility
+        # print(f"[match] {market.question} matched with {len(match.matched_lines)} lines from {match.matched_lines[0].source}")
+        
         pairs = [devig(l.odds_home, l.odds_away) for l in match.matched_lines]
         fh, fa = average_fair_values(pairs)
         sources = ",".join(sorted({l.source for l in match.matched_lines}))
