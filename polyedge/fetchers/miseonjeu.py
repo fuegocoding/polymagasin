@@ -36,7 +36,7 @@ class MiseonjeuFetcher(BaseFetcher):
         return out
 
     async def _sport(self, sport) -> list[OddsLine]:
-        path = _SPORTS[sport].replace("/", "_")
+        path = _SPORTS[sport]
         url = f"{_BASE}/listView/{path}.json"
         for i in range(3):
             try:

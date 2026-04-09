@@ -1,5 +1,5 @@
 [scanner]
-edge_threshold = 0.01
+edge_threshold = 0.005
 scan_interval_minutes = 1
 stale_odds_minutes = 5
 bankroll = 1000.0
@@ -10,7 +10,7 @@ enabled = [ "nba", "nhl", "mlb", "epl",]
 [sources]
 pinnacle = true
 stake = false
-miseonjeu = true
+miseonjeu = false
 
 [db]
 path = "polyedge.db"
