@@ -256,7 +256,7 @@ with tab_config:
             # Get current states from config_dict
             pinnacle_active = st.checkbox("Pinnacle (Arcadia)", value=config_dict['sources'].get("pinnacle", True))
             stake_active = st.checkbox("Stake", value=config_dict['sources'].get("stake", False))
-            mise_active = st.checkbox("Mise-o-jeu", value=config_dict['sources'].get("miseonjeu", True))
+            mise_active = st.checkbox("Mise-o-jeu", value=config_dict['sources'].get("miseonjeu", False))
             
             if st.form_submit_button("Update Sources"):
                 import os as _os
@@ -270,5 +270,14 @@ with tab_config:
                     st.success("Sources updated. Restarting the scanner recommended.")
                 except Exception as ex:
                     st.error(f"Failed to update sources: {ex}")
+
+    st.subheader("System Health")
+    h_cols = st.columns(len(config_dict['sources']) + 1)
+    h_cols[0].success("Polymarket: Connected")
+    for i, (src, active) in enumerate(config_dict['sources'].items()):
+        if active:
+            h_cols[i+1].success(f"{src.upper()}: Active")
+        else:
+            h_cols[i+1].error(f"{src.upper()}: Disabled")
 
 st.caption(f"PolyEdge Elite v2.3 | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
