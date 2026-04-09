@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS signals (
     kelly_fraction  REAL NOT NULL,
     suggested_size  REAL NOT NULL,
     sources_used    TEXT NOT NULL,
+    hedge_odds      REAL,
+    hedge_size      REAL,
     status          TEXT NOT NULL DEFAULT 'pending',
     outcome_price   REAL,
     pnl             REAL
