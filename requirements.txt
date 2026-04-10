@@ -10,4 +10,4 @@ plotly>=5.20.0
 psycopg2-binary>=2.9.9
 web3>=6.19.0
 eth-account>=0.11.0
-py-polymarket-sdk>=0.1.4
+py-clob-client>=2.0.0
