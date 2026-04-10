@@ -13,12 +13,16 @@ class OddsLine:
     odds_home: float
     odds_away: float
     fetched_at: datetime
+    external_id: str | None = None # e.g. Match ID
+    selection_id_home: str | None = None
+    selection_id_away: str | None = None
 
 @dataclass
 class PolyMarket:
     market_id: str
     question: str
     token_id_yes: str
+    token_id_no: str | None = None
     price_yes: float
     sport: str
     team_yes: str
@@ -45,6 +49,7 @@ class Signal:
     hedge_size: float | None = None
     arb_profit: float | None = None
     hedge_cost_pct: float | None = None
+    hedge_selection_id: str | None = None # The ID needed by the sportsbook
     status: str = "pending"
     outcome_price: float | None = None
     pnl: float | None = None

@@ -49,7 +49,10 @@ class StakeFetcher(BaseFetcher):
                             game_date=ev.start_time,
                             odds_home=odds[0].price,
                             odds_away=odds[1].price,
-                            fetched_at=datetime.now(timezone.utc)
+                            fetched_at=datetime.now(timezone.utc),
+                            external_id=str(ev.id),
+                            selection_id_home=str(odds[0].id),
+                            selection_id_away=str(odds[1].id)
                         )
             return None
         except Exception:

@@ -85,17 +85,22 @@ class PolymarketFetcher:
         if "o/u" in q_lower or "spread" in q_lower or ":" in q:
             return None
 
-        # Look for tokens array, otherwise construct a dummy id for paper trading
+        # Look for tokens array
         tokens = market.get("tokens", [])
+        tid_yes, tid_no = None, None
         if tokens:
-            tid = next(
-                (t["token_id"] for t in tokens if t.get("outcome", "") == "Yes"),
-                tokens[0].get("token_id"),
-            )
+            for t in tokens:
+                outcome = t.get("outcome", "").lower()
+                if outcome == "yes": tid_yes = t.get("token_id")
+                elif outcome == "no": tid_no = t.get("token_id")
+            
+            # Fallback if names are different
+            if not tid_yes and len(tokens) >= 1: tid_yes = tokens[0].get("token_id")
+            if not tid_no and len(tokens) >= 2: tid_no = tokens[1].get("token_id")
         else:
-            tid = market.get("conditionId", "unknown")
+            tid_yes = market.get("conditionId", "unknown")
 
-        if not tid:
+        if not tid_yes:
             return None
 
         q = market.get("question", "")
@@ -103,7 +108,6 @@ class PolymarketFetcher:
         if not ty or not tn:
             return None
         try:
-            # use end date or start date as game date approximation from the parent event
             date_str = market.get("endDate") or event.get("startDate") or ""
             gd = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         except Exception:
@@ -111,15 +115,16 @@ class PolymarketFetcher:
 
         slug = event.get("slug", event.get("id", ""))
         return PolyMarket(
-            market["id"],
-            q,
-            tid,
-            price_yes,
-            sport,
-            normalize_team(ty, sport),
-            normalize_team(tn, sport),
-            gd,
-            f"https://polymarket.com/event/{slug}",
+            market_id=str(market["id"]),
+            question=q,
+            token_id_yes=tid_yes,
+            token_id_no=tid_no,
+            price_yes=price_yes,
+            sport=sport,
+            team_yes=normalize_team(ty, sport),
+            team_no=normalize_team(tn, sport),
+            game_date=gd,
+            url=f"https://polymarket.com/event/{slug}",
         )
 
     def _teams(self, q, sport):

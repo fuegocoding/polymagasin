@@ -78,18 +78,26 @@ class PinnacleFetcher(BaseFetcher):
             except Exception:
                 continue
             prices = ml[mid].get("prices", [])
-            hp = next((p["price"] for p in prices if p.get("designation") == "home"), None)
-            ap = next((p["price"] for p in prices if p.get("designation") == "away"), None)
-            if hp is None or ap is None:
+            h_sel = next((p for p in prices if p.get("designation") == "home"), None)
+            a_sel = next((p for p in prices if p.get("designation") == "away"), None)
+            if h_sel is None or a_sel is None:
                 continue
+            
+            hp, ap = h_sel["price"], a_sel["price"]
             league_name = mu.get("league", {}).get("name", sport.upper())
+            
             lines.append(OddsLine(
-                "pinnacle", sport, league_name,
-                normalize_team(home, sport),
-                normalize_team(away, sport),
-                gd,
-                _to_decimal(hp),
-                _to_decimal(ap),
-                datetime.now(timezone.utc),
+                source="pinnacle", 
+                sport=sport, 
+                league=league_name,
+                team1=normalize_team(home, sport),
+                team2=normalize_team(away, sport),
+                game_date=gd,
+                odds_home=_to_decimal(hp),
+                odds_away=_to_decimal(ap),
+                fetched_at=datetime.now(timezone.utc),
+                external_id=str(mid),
+                selection_id_home=str(h_sel.get("lineId") or mid),
+                selection_id_away=str(a_sel.get("lineId") or mid)
             ))
         return lines

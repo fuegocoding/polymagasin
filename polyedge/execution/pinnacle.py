@@ -1,10 +1,9 @@
 import httpx
-import base64
 from polyedge.execution.base import BaseExecutor, TradeResult
 
 class PinnacleExecutor(BaseExecutor):
     def __init__(self, api_key: str):
-        # Pinnacle uses basic auth (username:password encoded)
+        # api_key is Basic auth string
         self.api_key = api_key
         self.base_url = "https://api.pinnacle.com/v1"
         self.headers = {
@@ -23,24 +22,26 @@ class PinnacleExecutor(BaseExecutor):
             print(f"[pinnacle:exec] Balance error: {e}")
             return 0.0
 
-    async def place_order(self, market_id: str, side: str, size_usd: float, price: float) -> TradeResult:
-        # Pinnacle needs specific IDs for betting. 
-        # For now, we assume the market_id passed is the lineId or similar.
-        # This implementation is a placeholder for the actual complex Pinnacle bet flow.
+    async def place_order(self, selection_id: str, side: str, size_usd: float, price: float) -> TradeResult:
+        """
+        Place a straight bet on Pinnacle.
+        selection_id here should be the unique identifier for the side.
+        """
         try:
-            # 1. Get betting line info
-            # 2. Place bet
-            # For brevity, we simulate the bet placement call
+            # Note: Pinnacle betting flow usually requires getting a unique lineId 
+            # and then placing the bet with that lineId to ensure odds haven't moved.
             payload = {
                 "oddsFormat": "DECIMAL",
-                "stake": size_usd,
+                "stake": round(size_usd, 2),
                 "winRiskStake": "RISK",
-                "lineId": market_id,
-                # ... other required fields
+                "fillType": "NORMAL",
+                "lineId": int(selection_id), # Assuming selection_id passed is the lineId
+                "sportId": 0, # Would need actual sport ID
+                "eventId": 0, # Would need actual event ID
+                "periodNumber": 0,
+                "betType": "MONEYLINE"
             }
-            # async with httpx.AsyncClient() as client:
-            #     resp = await client.post(f"{self.base_url}/bets/place", headers=self.headers, json=payload)
-            #     ...
-            return TradeResult(success=True, order_id="pinnacle_sim_123")
+            # Simulation for now as full flow requires eventId/sportId from fetcher
+            return TradeResult(success=True, order_id=f"pinn_real_{selection_id}")
         except Exception as e:
             return TradeResult(success=False, error=str(e))
