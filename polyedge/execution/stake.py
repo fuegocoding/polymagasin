@@ -97,7 +97,7 @@ class StakeExecutor(BaseExecutor):
             data = await self._post(payload)
             bet = (((data or {}).get("data") or {}).get("sportBet")) or {}
             if not bet:
-                return TradeResult(success=False, error=str(data.get("errors") or "bet rejected"))
+                return TradeResult(success=False, error=str(data.get("errors") or "bet rejected by Stake"))
             return TradeResult(
                 success=True,
                 order_id=str(bet.get("id") or ""),
