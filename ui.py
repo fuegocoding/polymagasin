@@ -62,7 +62,7 @@ def get_db_conn():
     cfg = load_config()
     return init_db(cfg)
 
-async def get_live_balance_ui(cfg):
+async def get_live_nav_data(cfg):
     from polyedge.scanner import get_total_live_balance
     return await get_total_live_balance(cfg)
 
@@ -98,12 +98,14 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-# --- Live Balance Interception ---
+# --- Live Account Interception ---
 current_cash = db_bankroll
+bal_breakdown = {}
 if config_dict['execution_enabled']:
     try:
         cfg_for_bal = load_config()
-        current_cash = asyncio.run(get_live_balance_ui(cfg_for_bal))
+        bal_breakdown = asyncio.run(get_live_nav_data(cfg_for_bal))
+        current_cash = bal_breakdown["total"]
     except Exception:
         current_cash = db_bankroll
 
@@ -138,9 +140,14 @@ with st.sidebar:
     
     st.divider()
     st.write(f"**Bankroll Mode:** {'💸 REAL MONEY' if is_live else '📝 PAPER TRADING'}")
-    if is_live:
-        st.write(f"**API Balance:** ${current_cash:,.2f}")
-    st.write(f"**Database:** {'PG' if config_dict['database_url'] else 'SQLite'}")
+    
+    if is_live and bal_breakdown:
+        st.subheader("Balance Breakdown")
+        for k, v in bal_breakdown.items():
+            if k != "total" and v > 0:
+                st.write(f"**{k.capitalize()}:** ${v:,.2f}")
+    
+    st.write(f"**Database Mode:** {'PostgreSQL' if config_dict['database_url'] else 'SQLite'}")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Net Asset Value", f"${net_asset_value:,.2f}", 
@@ -149,7 +156,7 @@ c1.metric("Net Asset Value", f"${net_asset_value:,.2f}",
 c2.metric("Liquid Cash", f"${current_cash:,.2f}", 
           help="Total available balance across all live accounts.")
 c3.metric("Guaranteed Profit", f"${unrealized_locked_profit:,.2f}", 
-          help="Money locked in from arbs currently in progress.")
+          help="Locked profit from arbs currently in progress.")
 c4.metric("Active Engines", sum(1 for v in config_dict['sources'].values() if v), 
           help="Number of enabled data providers.")
 
@@ -192,7 +199,7 @@ with tab_live:
         )
         st.success(f"📈 **Consolidated Guaranteed Return: ${unrealized_locked_profit:,.2f}**")
     else:
-        st.info("Scanner is active. No arbitrage opportunities meet the minimum ROI threshold at this moment.")
+        st.info("Searching for arbitrage opportunities... (Market scanners active)")
 
 # --- TAB 2: PERFORMANCE ANALYTICS ---
 with tab_analytics:
@@ -275,6 +282,24 @@ with tab_config:
                     st.success("Configuration updated successfully.")
                 except Exception as ex: st.error(f"Config write failure: {ex}")
                 if _is_pg(conn): conn.close()
+                st.rerun()
+    
+    with st.expander("🗑️ Danger Zone"):
+        st.error("This will permanently delete all trade history from the database.")
+        if st.button("Wipe All Trade History"):
+            conn = get_db_conn()
+            try:
+                conn.execute("DELETE FROM signals")
+                conn.execute("DELETE FROM bankroll_history")
+                # Reset bankroll to 1000.0 or current live total
+                conn.execute("UPDATE bankroll SET balance = ? WHERE id = 1", (current_cash,))
+                conn.commit()
+                st.success("History wiped successfully.")
+                if _is_pg(conn): conn.close()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Wipe failed: {e}")
+
     st.subheader("System Health")
     h_cols = st.columns(len(config_dict['sources']) + 1)
     h_cols[0].success("Polymarket: Connected")
