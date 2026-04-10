@@ -38,6 +38,8 @@ def load_config(path: str | None = None) -> Config:
         data = {}
 
     raw = data.get("scanner", {})
+    
+    # Environment variables are the primary source for all sensitive keys and toggles
     scanner = ScannerConfig(
         edge_threshold=float(os.getenv("EDGE_THRESHOLD", raw.get("edge_threshold", 0.01))),
         scan_interval_minutes=int(os.getenv("SCAN_INTERVAL_MINUTES", raw.get("scan_interval_minutes", 1))),
@@ -45,17 +47,32 @@ def load_config(path: str | None = None) -> Config:
         bankroll=float(os.getenv("BANKROLL", raw.get("bankroll", 1000.0))),
         execution_enabled=os.getenv("EXECUTION_ENABLED", str(raw.get("execution_enabled", False))).lower() == "true",
     )
+    
     db_path = os.getenv("DB_PATH", data.get("db", {}).get("path", "polyedge.db"))
     database_url = os.getenv("DATABASE_URL", data.get("db", {}).get("url"))
+    
+    # Provider toggles strictly from environment variables or defaults
+    def is_enabled(name, default):
+        env_val = os.getenv(f"ENABLE_{name.upper()}")
+        if env_val is not None:
+            return env_val.lower() == "true"
+        return data.get("sources", {}).get(name, default)
+
+    sources = {
+        "pinnacle": is_enabled("pinnacle", True),
+        "stake": is_enabled("stake", False),
+        "miseonjeu": is_enabled("miseonjeu", False),
+    }
     
     return Config(
         scanner=scanner,
         sports=data.get("sports", {}).get("enabled", ["nba", "nhl", "mlb", "epl"]),
-        sources=data.get("sources", {"pinnacle": True, "stake": True, "miseonjeu": True}),
+        sources=sources,
         db_path=db_path,
         database_url=database_url,
-        pinnacle_api_key=os.getenv("PINNACLE_API_KEY", data.get("keys", {}).get("pinnacle_api_key", "")),
-        stake_api_key=os.getenv("STAKE_API_KEY", data.get("keys", {}).get("stake_api_key", "")),
-        miseonjeu_api_key=os.getenv("MISEONJEU_API_KEY", data.get("keys", {}).get("miseonjeu_api_key", "")),
-        polymarket_key=os.getenv("POLYMARKET_KEY", data.get("keys", {}).get("polymarket_key", "")),
+        # Keys strictly from environment variables for security
+        pinnacle_api_key=os.getenv("PINNACLE_API_KEY", ""),
+        stake_api_key=os.getenv("STAKE_API_KEY", ""),
+        miseonjeu_api_key=os.getenv("MISEONJEU_API_KEY", ""),
+        polymarket_key=os.getenv("POLYMARKET_KEY", ""),
     )

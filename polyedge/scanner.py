@@ -10,6 +10,7 @@ from polyedge.edge.kelly import quarter_kelly_size
 from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll, get_signal_by_id
 from polyedge.execution.polymarket import PolymarketExecutor
 from polyedge.execution.pinnacle import PinnacleExecutor
+from polyedge.execution.stake import StakeExecutor
 
 def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     """Resolve pending signals where Polymarket price has settled (>0.95 or <0.05)."""
@@ -24,7 +25,6 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
         current_yes = price_map.get(sig.poly_market_id)
         if current_yes is None:
             continue
-        # Determine if this was a YES or NO bet from sources_used suffix
         bet_yes = not sig.sources_used.endswith(":NO")
         current_entry = current_yes if bet_yes else (1.0 - current_yes)
 
@@ -49,6 +49,8 @@ async def get_total_live_balance(config: Config) -> float:
         tasks.append(PolymarketExecutor(config.polymarket_key).get_balance())
     if config.pinnacle_api_key:
         tasks.append(PinnacleExecutor(config.pinnacle_api_key).get_balance())
+    if config.stake_api_key:
+        tasks.append(StakeExecutor(config.stake_api_key).get_balance())
     
     if not tasks:
         return 0.0
@@ -62,12 +64,21 @@ async def get_total_live_balance(config: Config) -> float:
 
 async def execute_arbitrage(config: Config, signal: Signal, token_id: str):
     """Perform real trades on both platforms."""
+    hedge_platform = signal.sources_used.split(":")[0].lower()
+    
     poly_exec = PolymarketExecutor(config.polymarket_key)
-    pinn_exec = PinnacleExecutor(config.pinnacle_api_key)
     
-    print(f"[exec] EXECUTION START: {signal.team1} vs {signal.team2}")
+    if hedge_platform == "pinnacle":
+        hedge_exec = PinnacleExecutor(config.pinnacle_api_key)
+    elif hedge_platform == "stake":
+        hedge_exec = StakeExecutor(config.stake_api_key)
+    else:
+        print(f"[exec] ERROR: Unsupported hedge platform {hedge_platform}")
+        return
+
+    print(f"[exec] EXECUTION START: {signal.team1} vs {signal.team2} on {hedge_platform}")
     
-    # 1. Start both trades concurrently to minimize latency risk
+    # Start both trades concurrently to minimize latency risk
     poly_task = asyncio.create_task(poly_exec.place_order(
         token_id=token_id, 
         side="BUY", 
@@ -75,17 +86,16 @@ async def execute_arbitrage(config: Config, signal: Signal, token_id: str):
         price=signal.poly_price
     ))
     
-    # Pinnacle needs specific matchup/line ID.
-    pinn_task = asyncio.create_task(pinn_exec.place_order(
-        market_id="matchup_id", # Simplified placeholder
+    hedge_task = asyncio.create_task(hedge_exec.place_order(
+        market_id="matchup_id", # Placeholder
         side="BUY",
         size_usd=signal.hedge_size,
         price=signal.hedge_odds
     ))
     
-    results = await asyncio.gather(poly_task, pinn_task, return_exceptions=True)
+    results = await asyncio.gather(poly_task, hedge_task, return_exceptions=True)
     for i, res in enumerate(results):
-        platform = "Polymarket" if i == 0 else "Pinnacle"
+        platform = "Polymarket" if i == 0 else hedge_platform.capitalize()
         if isinstance(res, Exception):
             print(f"[exec] {platform} CRITICAL ERROR: {res}")
         elif not res.success:
@@ -103,7 +113,6 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         print(f"[scanner] Live Bankroll fetched: ${bankroll:,.2f}")
         if bankroll < 10.0:
             print("[scanner] WARNING: Low balance, skipping execution.")
-            # Fallback to DB bankroll for signal generation only (no execution)
             bankroll = get_bankroll(conn)
     else:
         bankroll = get_bankroll(conn)
@@ -115,7 +124,6 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
     fresh = [l for l in odds_lines if (now - _tz(l.fetched_at)) <= stale]
-    # Check both pending and executed to avoid duplicates
     active_sigs = get_signals(conn, status="pending") + get_signals(conn, status="executed")
     active_ids = {s.poly_market_id for s in active_sigs}
     
@@ -166,7 +174,6 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         # Scaling Position Size proportionally to Total Bankroll
         size, frac = quarter_kelly_size(arb_profit, fair_val, bankroll)
         
-        # Final safety check
         if entry_price < 0.01: continue
 
         hedge_size = (size / entry_price) / hedge_odds

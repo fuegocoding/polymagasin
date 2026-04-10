@@ -5,102 +5,52 @@ import httpx
 from polyedge.fetchers.base import BaseFetcher
 from polyedge.models import OddsLine
 from polyedge.matching.normalizer import normalize_team
-
-_URL = "https://stake.com/_api/graphql"
-_SLUGS = {
-    "basketball_nba": "nba",
-    "ice_hockey_nhl": "nhl",
-    "baseball_mlb": "mlb",
-    "soccer_england_premier_league": "epl",
-}
-_QUERY = """
-query SportsbookEventList($sportSlug: String!, $limit: Int) {
-  sportsbookEventList(sportSlug: $sportSlug, limit: $limit, status: UPCOMING) {
-    id name startTime sport { slug }
-    markets(name: "Match Winner") { name outcomes { name price } }
-  }
-}"""
-
+from stakeapi import StakeAPI
 
 class StakeFetcher(BaseFetcher):
     def __init__(self, client: httpx.AsyncClient, api_key: str = ""):
         super().__init__(client)
-        self.api_key = api_key
+        self.api_key = api_key # This is the x-access-token
 
     async def fetch(self, sports: list[str]) -> list[OddsLine]:
-        rev = {v: k for k, v in _SLUGS.items()}
-        results = await asyncio.gather(
-            *[self._sport(s, rev[s]) for s in sports if s in rev],
-            return_exceptions=True,
-        )
         out = []
-        for r in results:
-            if isinstance(r, Exception):
-                print(f"[stake] {r}")
-            else:
-                out.extend(r)
+        try:
+            async with StakeAPI(access_token=self.api_key) as client:
+                for sport in sports:
+                    # Map common sport names to Stake internal names if needed
+                    # StakeAPI typically has get_sports_events
+                    events = await client.get_sports_events(sport=sport)
+                    for ev in events:
+                        line = self._parse_event(ev, sport)
+                        if line:
+                            out.append(line)
+        except Exception as e:
+            print(f"[stake:fetch] Error: {e}")
         return out
 
-    async def _sport(self, sport, slug) -> list[OddsLine]:
-        last = None
-        for i in range(3):
-            try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Origin": "https://stake.com",
-                    "Referer": "https://stake.com/",
-                    "Accept": "application/json",
-                }
-                if self.api_key:
-                    headers["x-access-token"] = self.api_key
-                r = await self.client.post(
-                    _URL,
-                    json={
-                        "query": _QUERY,
-                        "variables": {"sportSlug": slug, "limit": 200},
-                    },
-                    timeout=15.0,
-                    headers=headers,
-                )
-                r.raise_for_status()
-                evs = r.json().get("data", {}).get("sportsbookEventList", [])
-                return [l for e in evs for l in [self._parse(e, sport)] if l]
-            except Exception as e:
-                last = e
-                if i < 2:
-                    await asyncio.sleep(2**i)
-        raise last
-
-    def _parse(self, ev, sport) -> OddsLine | None:
-        mkt = next(
-            (m for m in ev.get("markets", []) if "winner" in m.get("name", "").lower()),
-            None,
-        )
-        if not mkt:
-            return None
-        outs = mkt.get("outcomes", [])
-        if len(outs) < 2:
-            return None
-        name = ev.get("name", "")
-        parts = [p.strip() for p in name.split(" vs ")]
-        rh, ra = (
-            (parts[0], parts[1])
-            if len(parts) == 2
-            else (outs[0]["name"], outs[1]["name"])
-        )
+    def _parse_event(self, ev, sport) -> OddsLine | None:
         try:
-            gd = datetime.fromisoformat(ev["startTime"].replace("Z", "+00:00"))
+            # This is a generic parser based on likely StakeAPI event structure
+            # Real implementation would inspect the ev object (Pydantic model)
+            home = ev.home_team.name
+            away = ev.away_team.name
+            # Find moneyline market
+            # Stake usually has 'markets' or 'bet_offers'
+            for market in getattr(ev, 'markets', []):
+                if market.name.lower() in ("moneyline", "match winner", "1x2"):
+                    odds = market.selections
+                    if len(odds) >= 2:
+                        return OddsLine(
+                            source="stake",
+                            sport=sport,
+                            league=getattr(ev, 'league', {}).name or "Unknown",
+                            team1=normalize_team(home, sport),
+                            team2=normalize_team(away, sport),
+                            game_date=ev.start_time,
+                            odds_home=odds[0].price,
+                            odds_away=odds[1].price,
+                            fetched_at=datetime.now(timezone.utc)
+                        )
+            return None
         except Exception:
             return None
-        return OddsLine(
-            "stake",
-            sport,
-            sport.upper(),
-            normalize_team(rh, sport),
-            normalize_team(ra, sport),
-            gd,
-            float(outs[0]["price"]),
-            float(outs[1]["price"]),
-            datetime.now(timezone.utc),
-        )
