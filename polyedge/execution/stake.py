@@ -60,7 +60,7 @@ class StakeExecutor(BaseExecutor):
                     last = e
         if last is not None:
             raise last
-        raise RuntimeError("stake request failed: no endpoint response")
+        raise RuntimeError("stake request failed: no endpoints configured")
 
     async def get_balance(self) -> float:
         if not self.api_key:
