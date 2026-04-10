@@ -22,13 +22,13 @@ class PolyMarket:
     market_id: str
     question: str
     token_id_yes: str
-    token_id_no: str | None = None
     price_yes: float
     sport: str
     team_yes: str
     team_no: str
     game_date: datetime
     url: str
+    token_id_no: str | None = None
 
 @dataclass
 class Signal:
