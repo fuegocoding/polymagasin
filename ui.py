@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 import toml
 import plotly.express as px
 import plotly.graph_objects as go
+import os
 
 # --- Professional Styling ---
 st.set_page_config(
@@ -31,6 +32,42 @@ st.markdown("""
     div[data-testid="stExpander"] { border: 1px solid #1f2937; border-radius: 12px; background-color: #111827; }
     </style>
     """, unsafe_allow_html=True)
+
+# --- Password Protection ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    password = os.getenv("DASHBOARD_PASSWORD")
+    if not password:
+        # If no password is set, allow access
+        return True
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == os.getenv("DASHBOARD_PASSWORD"):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input(
+            "Enter Dashboard Password", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error.
+        st.text_input(
+            "Enter Dashboard Password", type="password", on_change=password_entered, key="password"
+        )
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        # Password correct.
+        return True
+
+if not check_password():
+    st.stop()
 
 # Auto-refresh every 30 seconds
 st_autorefresh(interval=30_000, key="autorefresh")
@@ -104,17 +141,15 @@ net_asset_value = bankroll + unrealized_locked_profit
 st.title("🛡️ PolyEdge | Institutional Arb v2.3")
 
 with st.sidebar:
-    st.header("⚡ Execution Control")
-    is_live = st.toggle("LIVE TRADING ENABLED", value=config_dict['execution_enabled'], help="If enabled, the bot will place real trades on Polymarket & Pinnacle.")
-    if is_live != config_dict['execution_enabled']:
-        import os as _os
-        config_path = _os.getenv("CONFIG_PATH", "config.toml")
-        try:
-            with open(config_path, "r") as f: data = toml.load(f)
-            data.setdefault("scanner", {})["execution_enabled"] = is_live
-            with open(config_path, "w") as f: toml.dump(data, f)
-            st.rerun()
-        except Exception: pass
+    st.header("⚡ Execution Status")
+    is_live = config_dict['execution_enabled']
+    
+    if is_live:
+        st.success("LIVE TRADING ACTIVE")
+        st.caption("Trading is enabled via environment variables. Capital is being deployed.")
+    else:
+        st.info("PAPER TRADING MODE")
+        st.caption("Execution is disabled. Change EXECUTION_ENABLED=true in Railway to go live.")
     
     st.divider()
     st.write(f"**Bankroll Mode:** {'💸 REAL MONEY' if is_live else '📝 PAPER TRADING'}")
@@ -241,7 +276,7 @@ with tab_ledger:
     if all_history:
         ledger_rows = []
         for s in all_history:
-            status_color = "🟢" if s['status'] == "won" else ("🔴" if s['status'] == "lost" else ("⚪" if s['status'] == "pending" else "✖️"))
+            status_color = "🟢" if s['status'] == "won" else ("🔴" if s['status'] == "lost" else ("⚪" if s['status'] in ("pending", "executed") else "✖️"))
             ledger_rows.append({
                 "ID": s['id'],
                 "Time": s['timestamp'].strftime("%Y-%m-%d %H:%M"),
@@ -256,7 +291,7 @@ with tab_ledger:
         st.dataframe(pd.DataFrame(ledger_rows), width="stretch", hide_index=True)
         
         # Manual settlement
-        pending_for_manual = [s for s in signals_list if s['status'] == "pending"]
+        pending_for_manual = [s for s in signals_list if s['status'] in ("pending", "executed")]
         if pending_for_manual:
             with st.expander("🛠️ Manual Settlement Tool"):
                 st.info("Manually settle a trade if auto-resolve fails or price data is stale.")
@@ -277,21 +312,21 @@ with tab_ledger:
 # --- TAB 4: SYSTEM CONTROL ---
 with tab_config:
     st.subheader("Core Parameters")
+    st.warning("⚠️ High-level configuration is now strictly managed via environment variables for security.")
     
-    with st.expander("💰 Financial Overrides"):
+    with st.expander("💰 Financial Management", expanded=True):
         with st.form("sys_fin"):
             f1, f2 = st.columns(2)
-            new_bank = f1.number_input("Reset Bankroll ($)", value=float(bankroll))
-            new_edge = f2.slider("Min Arb ROI %", 0.1, 5.0, float(config_dict['edge_threshold']*100.0)) / 100.0
-            if st.form_submit_button("Confirm System Update"):
+            new_bank = f1.number_input("Adjust Local Bankroll ($)", value=float(bankroll))
+            new_edge = f2.slider("Local Threshold % (Overrides env if saved)", 0.1, 5.0, float(config_dict['edge_threshold']*100.0)) / 100.0
+            if st.form_submit_button("Save Changes"):
                 conn = get_db_conn()
                 from polyedge.db.signals import update_bankroll
                 if abs(new_bank - bankroll) > 0.01:
                     update_bankroll(conn, new_bank - bankroll, "Manual update via Control Panel")
                 
                 # Persistence (config.toml)
-                import os as _os
-                config_path = _os.getenv("CONFIG_PATH", "config.toml")
+                config_path = os.getenv("CONFIG_PATH", "config.toml")
                 try:
                     with open(config_path, "r") as f: data = toml.load(f)
                     data.setdefault("scanner", {})["edge_threshold"] = new_edge
@@ -302,24 +337,10 @@ with tab_config:
                 if _is_pg(conn): conn.close()
 
     with st.expander("📡 Source Management"):
-        st.info("Toggle data sources. Requires scanner restart to take effect.")
-        with st.form("source_toggle"):
-            pinnacle_active = st.checkbox("Pinnacle (Arcadia)", value=config_dict['sources'].get("pinnacle", True))
-            stake_active = st.checkbox("Stake", value=config_dict['sources'].get("stake", False))
-            mise_active = st.checkbox("Mise-o-jeu", value=config_dict['sources'].get("miseonjeu", False))
-            
-            if st.form_submit_button("Update Sources"):
-                import os as _os
-                config_path = _os.getenv("CONFIG_PATH", "config.toml")
-                try:
-                    with open(config_path, "r") as f: data = toml.load(f)
-                    data.setdefault("sources", {})["pinnacle"] = pinnacle_active
-                    data["sources"]["stake"] = stake_active
-                    data["sources"]["miseonjeu"] = mise_active
-                    with open(config_path, "w") as f: toml.dump(data, f)
-                    st.success("Sources updated. Restarting the scanner recommended.")
-                except Exception as ex:
-                    st.error(f"Failed to update sources: {ex}")
+        st.info("Provider statuses currently active:")
+        for src, active in config_dict['sources'].items():
+            status = "✅ ENABLED" if active else "❌ DISABLED"
+            st.write(f"**{src.upper()}**: {status}")
 
     st.subheader("System Health")
     h_cols = st.columns(len(config_dict['sources']) + 1)
@@ -332,4 +353,4 @@ with tab_config:
     
     st.write(f"**Database Mode:** {'PostgreSQL' if config_dict['database_url'] else 'SQLite'}")
 
-st.caption(f"PolyEdge Elite v2.3 | Mode: {'PG' if config_dict['database_url'] else 'Local'} | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"PolyEdge Elite v2.3 | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
