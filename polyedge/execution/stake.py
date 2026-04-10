@@ -58,9 +58,7 @@ class StakeExecutor(BaseExecutor):
                     return resp.json()
                 except Exception as e:
                     last = e
-        if last:
-            raise last
-        raise RuntimeError("stake request failed")
+        raise last
 
     async def get_balance(self) -> float:
         if not self.api_key:

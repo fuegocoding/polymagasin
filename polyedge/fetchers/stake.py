@@ -78,7 +78,7 @@ class StakeFetcher(BaseFetcher):
                     except Exception as e:
                         last = e
                         continue
-                raise last if last else RuntimeError("stake fetch failed")
+                raise last
             except Exception as e:
                 last = e
                 if i < 2:
