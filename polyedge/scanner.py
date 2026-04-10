@@ -73,7 +73,7 @@ async def execute_arbitrage(config: Config, signal: Signal, token_id: str, hedge
     
     print(f"[exec] EXECUTION START: {signal.team1} vs {signal.team2}")
     if not hedge_market_id:
-        print(f"[exec] Missing market_id or outcome_id for {hedge_source}, skipping execution")
+        print(f"[exec] Missing market_id for {hedge_source}, skipping execution")
         return
     
     # 1. Start both trades concurrently to minimize latency risk

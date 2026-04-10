@@ -78,7 +78,9 @@ class StakeFetcher(BaseFetcher):
                     except Exception as e:
                         last = e
                         continue
-                raise last
+                if last is not None:
+                    raise last
+                raise RuntimeError("stake fetch failed: no endpoint response")
             except Exception as e:
                 last = e
                 if i < 2:
