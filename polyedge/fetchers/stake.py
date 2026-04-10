@@ -6,7 +6,10 @@ from polyedge.fetchers.base import BaseFetcher
 from polyedge.models import OddsLine
 from polyedge.matching.normalizer import normalize_team
 
-_URL = "https://stake.com/_api/graphql"
+_URLS = [
+    "https://api.stake.com/graphql",
+    "https://stake.com/_api/graphql",
+]
 _SLUGS = {
     "basketball_nba": "nba",
     "ice_hockey_nhl": "nhl",
@@ -17,7 +20,7 @@ _QUERY = """
 query SportsbookEventList($sportSlug: String!, $limit: Int) {
   sportsbookEventList(sportSlug: $sportSlug, limit: $limit, status: UPCOMING) {
     id name startTime sport { slug }
-    markets(name: "Match Winner") { name outcomes { name price } }
+    markets(name: "Match Winner") { id name outcomes { id name price } }
   }
 }"""
 
@@ -54,18 +57,28 @@ class StakeFetcher(BaseFetcher):
                 }
                 if self.api_key:
                     headers["x-access-token"] = self.api_key
-                r = await self.client.post(
-                    _URL,
-                    json={
-                        "query": _QUERY,
-                        "variables": {"sportSlug": slug, "limit": 200},
-                    },
-                    timeout=15.0,
-                    headers=headers,
-                )
-                r.raise_for_status()
-                evs = r.json().get("data", {}).get("sportsbookEventList", [])
-                return [l for e in evs for l in [self._parse(e, sport)] if l]
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                payload = {
+                    "operationName": "SportsbookEventList",
+                    "query": _QUERY,
+                    "variables": {"sportSlug": slug, "limit": 200},
+                }
+                for url in _URLS:
+                    try:
+                        r = await self.client.post(
+                            url,
+                            json=payload,
+                            timeout=15.0,
+                            headers=headers,
+                        )
+                        r.raise_for_status()
+                        evs = r.json().get("data", {}).get("sportsbookEventList", [])
+                        if isinstance(evs, list):
+                            return [l for e in evs for l in [self._parse(e, sport)] if l]
+                    except Exception as e:
+                        last = e
+                        continue
+                raise last if last else RuntimeError("stake fetch failed")
             except Exception as e:
                 last = e
                 if i < 2:
@@ -103,4 +116,7 @@ class StakeFetcher(BaseFetcher):
             float(outs[0]["price"]),
             float(outs[1]["price"]),
             datetime.now(timezone.utc),
+            str(mkt.get("id")) if mkt.get("id") is not None else None,
+            str(outs[0].get("id")) if outs[0].get("id") is not None else None,
+            str(outs[1].get("id")) if outs[1].get("id") is not None else None,
         )

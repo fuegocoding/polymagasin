@@ -105,7 +105,7 @@ st.title("🛡️ PolyEdge | Institutional Arb v2.3")
 
 with st.sidebar:
     st.header("⚡ Execution Control")
-    is_live = st.toggle("LIVE TRADING ENABLED", value=config_dict['execution_enabled'], help="If enabled, the bot will place real trades on Polymarket & Pinnacle.")
+    is_live = st.toggle("LIVE TRADING ENABLED", value=config_dict['execution_enabled'], help="If enabled, the bot will place real trades on Polymarket and the selected hedge source (Pinnacle/Stake).")
     if is_live != config_dict['execution_enabled']:
         import os as _os
         config_path = _os.getenv("CONFIG_PATH", "config.toml")

@@ -13,6 +13,9 @@ class OddsLine:
     odds_home: float
     odds_away: float
     fetched_at: datetime
+    market_id: str | None = None
+    home_outcome_id: str | None = None
+    away_outcome_id: str | None = None
 
 @dataclass
 class PolyMarket:
