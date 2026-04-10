@@ -46,7 +46,7 @@ class StakeFetcher(BaseFetcher):
         last: Exception | None = None
         for i in range(3):
             try:
-                async with StakeAPI(access_token=self.api_key or None) as stake:
+                async with StakeAPI(access_token=self.api_key) as stake:
                     data = await stake._graphql_request(
                         _QUERY,
                         variables={"sportSlug": slug, "limit": 200},
@@ -87,6 +87,9 @@ class StakeFetcher(BaseFetcher):
             gd = datetime.fromisoformat(ev["startTime"].replace("Z", "+00:00"))
         except Exception:
             return None
+        mid = mkt.get("id")
+        h_id = outs[0].get("id")
+        a_id = outs[1].get("id")
         return OddsLine(
             "stake",
             sport,
@@ -97,7 +100,7 @@ class StakeFetcher(BaseFetcher):
             float(outs[0]["price"]),
             float(outs[1]["price"]),
             datetime.now(timezone.utc),
-            str(mkt.get("id")) if mkt.get("id") is not None else None,
-            str(outs[0].get("id")) if outs[0].get("id") is not None else None,
-            str(outs[1].get("id")) if outs[1].get("id") is not None else None,
+            str(mid) if mid is not None else None,
+            str(h_id) if h_id is not None else None,
+            str(a_id) if a_id is not None else None,
         )
