@@ -47,6 +47,10 @@ class StakeFetcher(BaseFetcher):
         for i in range(3):
             try:
                 async with StakeAPI(access_token=self.api_key) as stake:
+                    # StakeAPI's public get_sports_events() uses a different schema
+                    # (sportsEvents, not sportsbookEventList). We use _graphql_request()
+                    # to run our specific sportsbook query. If the library adds a public
+                    # sportsbook method in a future release, migrate to that.
                     data = await stake._graphql_request(
                         _QUERY,
                         variables={"sportSlug": slug, "limit": 200},

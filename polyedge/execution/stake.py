@@ -44,6 +44,9 @@ class StakeExecutor(BaseExecutor):
             return TradeResult(success=False, error="missing stake_api_key")
         try:
             async with StakeAPI(access_token=self.api_key) as stake:
+                # StakeAPI's public place_bet() targets a REST endpoint that doesn't
+                # support sportsbook mutations. We use _graphql_request() for the SportBet
+                # mutation directly. Migrate to a public method if the library adds one.
                 data = await stake._graphql_request(
                     _BET_MUTATION,
                     variables={
