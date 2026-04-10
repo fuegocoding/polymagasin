@@ -83,6 +83,11 @@ def log_scan(conn, markets_scanned, signals_found, sources_active, duration_ms):
     conn.commit()
 
 def _row(row: sqlite3.Row) -> Signal:
+    # helper to get value if column exists, else None (sqlite3.Row doesn't have .get())
+    def g(key):
+        try: return row[key]
+        except (IndexError, KeyError, sqlite3.OperationalError): return None
+
     return Signal(
         id=row["id"],
         timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -95,5 +100,6 @@ def _row(row: sqlite3.Row) -> Signal:
         sources_used=row["sources_used"], status=row["status"],
         outcome_price=row["outcome_price"], pnl=row["pnl"],
         hedge_odds=row["hedge_odds"], hedge_size=row["hedge_size"],
-        arb_profit=row.get("arb_profit"), hedge_cost_pct=row.get("hedge_cost_pct")
+        arb_profit=g("arb_profit"), 
+        hedge_cost_pct=g("hedge_cost_pct")
     )
