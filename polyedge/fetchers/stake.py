@@ -80,7 +80,7 @@ class StakeFetcher(BaseFetcher):
                         continue
                 if last is not None:
                     raise last
-                raise RuntimeError("stake fetch failed: no endpoints configured")
+                raise RuntimeError("stake fetch failed: all endpoints failed with unknown error")
             except Exception as e:
                 last = e
                 if i < 2:
