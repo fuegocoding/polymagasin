@@ -10,9 +10,8 @@ class PolymarketExecutor(BaseExecutor):
         self.private_key = private_key
         host = "https://clob.polymarket.com"
         chain_id = POLYGON
-        # Note: Production usage often requires API Key/Secret/Passphrase
-        # but for balance checks, the private key alone can often initialize the client
-        self.client = ClobClient(host, chain_id=chain_id, private_key=private_key)
+        # py-clob-client uses 'key' for the private key parameter
+        self.client = ClobClient(host, chain_id=chain_id, key=private_key)
 
     async def get_balance(self) -> float:
         """Fetch USDC collateral balance from Polymarket CLOB."""
