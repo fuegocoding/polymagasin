@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sqlite3
+import asyncio
 from datetime import datetime, timezone, timedelta
 from polyedge.config import Config
 from polyedge.models import OddsLine, PolyMarket, Signal
@@ -7,13 +8,19 @@ from polyedge.matching.matcher import find_matching_odds
 from polyedge.edge.calculator import devig, calculate_edge, average_fair_values
 from polyedge.edge.kelly import quarter_kelly_size
 from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll, get_signal_by_id
+from polyedge.execution.polymarket import PolymarketExecutor
+from polyedge.execution.pinnacle import PinnacleExecutor
 
 def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     """Resolve pending signals where Polymarket price has settled (>0.95 or <0.05)."""
     price_map = {m.market_id: m.price_yes for m in poly_markets}
+    # For resolution, we check both 'pending' and 'executed'
     pending = get_signals(conn, status="pending")
+    executed = get_signals(conn, status="executed")
+    to_check = pending + executed
+    
     resolved = []
-    for sig in pending:
+    for sig in to_check:
         current_yes = price_map.get(sig.poly_market_id)
         if current_yes is None:
             continue
@@ -34,9 +41,73 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     return resolved
 
 
+async def get_total_live_balance(config: Config) -> float:
+    """Fetch live balances from all active platforms and sum them up."""
+    total = 0.0
+    tasks = []
+    if config.polymarket_key:
+        tasks.append(PolymarketExecutor(config.polymarket_key).get_balance())
+    if config.pinnacle_api_key:
+        tasks.append(PinnacleExecutor(config.pinnacle_api_key).get_balance())
+    
+    if not tasks:
+        return 0.0
+        
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for res in results:
+        if isinstance(res, (float, int)):
+            total += res
+    return total
+
+
+async def execute_arbitrage(config: Config, signal: Signal, token_id: str):
+    """Perform real trades on both platforms."""
+    poly_exec = PolymarketExecutor(config.polymarket_key)
+    pinn_exec = PinnacleExecutor(config.pinnacle_api_key)
+    
+    print(f"[exec] EXECUTION START: {signal.team1} vs {signal.team2}")
+    
+    # 1. Start both trades concurrently to minimize latency risk
+    poly_task = asyncio.create_task(poly_exec.place_order(
+        token_id=token_id, 
+        side="BUY", 
+        size_usd=signal.suggested_size, 
+        price=signal.poly_price
+    ))
+    
+    # Pinnacle needs specific matchup/line ID.
+    pinn_task = asyncio.create_task(pinn_exec.place_order(
+        market_id="matchup_id", # Simplified placeholder
+        side="BUY",
+        size_usd=signal.hedge_size,
+        price=signal.hedge_odds
+    ))
+    
+    results = await asyncio.gather(poly_task, pinn_task, return_exceptions=True)
+    for i, res in enumerate(results):
+        platform = "Polymarket" if i == 0 else "Pinnacle"
+        if isinstance(res, Exception):
+            print(f"[exec] {platform} CRITICAL ERROR: {res}")
+        elif not res.success:
+            print(f"[exec] {platform} FAILED: {res.error}")
+        else:
+            print(f"[exec] {platform} SUCCESS: Order {res.order_id}")
+
+
 async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signal]:
     threshold = config.scanner.edge_threshold
-    bankroll = get_bankroll(conn)
+    
+    # DYNAMIC BANKROLL ALLOCATION
+    if config.scanner.execution_enabled:
+        bankroll = await get_total_live_balance(config)
+        print(f"[scanner] Live Bankroll fetched: ${bankroll:,.2f}")
+        if bankroll < 10.0:
+            print("[scanner] WARNING: Low balance, skipping execution.")
+            # Fallback to DB bankroll for signal generation only (no execution)
+            bankroll = get_bankroll(conn)
+    else:
+        bankroll = get_bankroll(conn)
+        
     stale = timedelta(minutes=config.scanner.stale_odds_minutes)
     now = datetime.now(timezone.utc)
 
@@ -44,12 +115,15 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
     fresh = [l for l in odds_lines if (now - _tz(l.fetched_at)) <= stale]
-    pending = {s.poly_market_id for s in get_signals(conn, status="pending")}
+    # Check both pending and executed to avoid duplicates
+    active_sigs = get_signals(conn, status="pending") + get_signals(conn, status="executed")
+    active_ids = {s.poly_market_id for s in active_sigs}
+    
     signals = []
 
     matches_found = 0
     for market in poly_markets:
-        if market.market_id in pending: continue
+        if market.market_id in active_ids: continue
         if market.price_yes >= 0.95 or market.price_yes <= 0.05: continue
         
         match = find_matching_odds(market, fresh)
@@ -66,18 +140,12 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         p_yes = market.price_yes
         h_odds_yes = max(l.odds_away if match.team_is_home else l.odds_home for l in match.matched_lines)
         arb_cost_yes = p_yes + (1.0 / h_odds_yes)
-        arb_profit_yes = (1.0 / arb_cost_yes) - 1.0 if arb_cost_yes < 1.0 else (1.0 / arb_cost_yes) - 1.0
+        arb_profit_yes = (1.0 / arb_cost_yes) - 1.0 if arb_cost_yes < 1.0 else -1.0
         
         p_no = 1.0 - market.price_yes
         h_odds_no = max(l.odds_home if match.team_is_home else l.odds_away for l in match.matched_lines)
         arb_cost_no = p_no + (1.0 / h_odds_no)
-        arb_profit_no = (1.0 / arb_cost_no) - 1.0 if arb_cost_no < 1.0 else (1.0 / arb_cost_no) - 1.0
-
-        # Log close calls (within 2% of threshold)
-        best_profit = max(arb_profit_yes, arb_profit_no)
-        if best_profit >= (threshold - 0.02):
-            side = "YES" if arb_profit_yes > arb_profit_no else "NO"
-            print(f"[debug] {market.question} match found! Profit: {best_profit*100:.2f}% ({side})")
+        arb_profit_no = (1.0 / arb_cost_no) - 1.0 if arb_cost_no < 1.0 else -1.0
 
         # Choose the best arbitrage opportunity
         if arb_profit_yes > arb_profit_no and arb_profit_yes >= threshold:
@@ -95,10 +163,10 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         else:
             continue
 
-        # Use arb_profit as the 'edge' for Kelly to keep it consistent
+        # Scaling Position Size proportionally to Total Bankroll
         size, frac = quarter_kelly_size(arb_profit, fair_val, bankroll)
         
-        # Final safety check: if entry_price is too low or high, kelly might get wild
+        # Final safety check
         if entry_price < 0.01: continue
 
         hedge_size = (size / entry_price) / hedge_odds
@@ -117,6 +185,12 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
             hedge_odds=round(hedge_odds, 4), hedge_size=round(hedge_size, 2),
             arb_profit=round(arb_profit, 4), hedge_cost_pct=round(1.0/hedge_odds, 4)
         )
+        
+        # REAL MONEY EXECUTION
+        if config.scanner.execution_enabled and bankroll >= 10.0:
+            await execute_arbitrage(config, sig, market.token_id_yes)
+            sig.status = "executed"
+
         insert_signal(conn, sig)
         signals.append(sig)
     

@@ -53,6 +53,11 @@ def watch(config: str = typer.Option("config.toml")):
     async def on_update(markets, odds):
         import time as _time
         t0 = _time.monotonic()
+        
+        # 0. Reload config to pick up live toggle or threshold changes from UI
+        from polyedge.config import load_config as _load_cfg
+        current_cfg = _load_cfg(config)
+        
         # 1. Auto-resolve settled markets
         resolved = auto_resolve(conn, markets)
         for sig, outcome, price in resolved:
@@ -61,7 +66,7 @@ def watch(config: str = typer.Option("config.toml")):
             console.print(f"[{color}]RESOLVED [{sig.id}] {sig.team1} vs {sig.team2} → {outcome.upper()} @ {price:.3f} | P&L: {sig.pnl:+.2f} | Bankroll: ${balance:.2f}[/{color}]")
         
         # 2. Scan for new signals
-        sigs = await run_scan(markets, odds, cfg, conn)
+        sigs = await run_scan(markets, odds, current_cfg, conn)
         ms = int((_time.monotonic() - t0) * 1000)
         print_signals_table(sigs)
         print_scan_summary(len(sigs), len(markets), [f"odds:{len(odds)}"], ms)

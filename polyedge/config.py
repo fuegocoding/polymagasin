@@ -10,6 +10,7 @@ class ScannerConfig:
     scan_interval_minutes: int = 1
     stale_odds_minutes: int = 5
     bankroll: float = 1000.0
+    execution_enabled: bool = False
 
 
 @dataclass
@@ -42,6 +43,7 @@ def load_config(path: str | None = None) -> Config:
         scan_interval_minutes=int(os.getenv("SCAN_INTERVAL_MINUTES", raw.get("scan_interval_minutes", 1))),
         stale_odds_minutes=int(os.getenv("STALE_ODDS_MINUTES", raw.get("stale_odds_minutes", 5))),
         bankroll=float(os.getenv("BANKROLL", raw.get("bankroll", 1000.0))),
+        execution_enabled=os.getenv("EXECUTION_ENABLED", str(raw.get("execution_enabled", False))).lower() == "true",
     )
     db_path = os.getenv("DB_PATH", data.get("db", {}).get("path", "polyedge.db"))
     database_url = os.getenv("DATABASE_URL", data.get("db", {}).get("url"))

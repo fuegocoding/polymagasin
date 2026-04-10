@@ -47,6 +47,7 @@ def load_serializable_data():
     
     config_dict = {
         "edge_threshold": cfg_obj.scanner.edge_threshold,
+        "execution_enabled": cfg_obj.scanner.execution_enabled,
         "db_path": cfg_obj.db_path,
         "database_url": cfg_obj.database_url,
         "pinnacle_key": cfg_obj.pinnacle_api_key,
@@ -84,7 +85,7 @@ except Exception as e:
 
 # --- Advanced Computation ---
 pending   = [s for s in signals_list if s['status'] == "pending"]
-resolved  = [s for s in signals_list if s['status'] in ("won", "lost", "push")]
+resolved  = [s for s in signals_list if s['status'] in ("won", "lost", "push", "executed")]
 total_realized_pnl = sum(s['pnl'] for s in resolved if s['pnl'] is not None)
 
 # Guaranteed Profit from Open Arbs
@@ -101,6 +102,23 @@ net_asset_value = bankroll + unrealized_locked_profit
 
 # --- Top Dashboard Layout ---
 st.title("🛡️ PolyEdge | Institutional Arb v2.3")
+
+with st.sidebar:
+    st.header("⚡ Execution Control")
+    is_live = st.toggle("LIVE TRADING ENABLED", value=config_dict['execution_enabled'], help="If enabled, the bot will place real trades on Polymarket & Pinnacle.")
+    if is_live != config_dict['execution_enabled']:
+        import os as _os
+        config_path = _os.getenv("CONFIG_PATH", "config.toml")
+        try:
+            with open(config_path, "r") as f: data = toml.load(f)
+            data.setdefault("scanner", {})["execution_enabled"] = is_live
+            with open(config_path, "w") as f: toml.dump(data, f)
+            st.rerun()
+        except Exception: pass
+    
+    st.divider()
+    st.write(f"**Bankroll Mode:** {'💸 REAL MONEY' if is_live else '📝 PAPER TRADING'}")
+    st.write(f"**Database:** {'PG' if config_dict['database_url'] else 'SQLite'}")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Net Asset Value", f"${net_asset_value:,.2f}", 
