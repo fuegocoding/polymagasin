@@ -4,7 +4,7 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 from polyedge.config import load_config
 from polyedge.db.schema import init_db
-from polyedge.db.signals import get_signals, get_pnl_by_sport, get_bankroll
+from polyedge.db.signals import get_signals, get_pnl_by_sport, get_bankroll, _is_pg
 from datetime import datetime, timezone, timedelta
 import toml
 import plotly.express as px
@@ -38,16 +38,17 @@ st_autorefresh(interval=30_000, key="autorefresh")
 # --- Data Engine ---
 def get_db_conn():
     cfg = load_config()
-    return init_db(cfg.db_path)
+    return init_db(cfg)
 
 @st.cache_data(ttl=2)
 def load_serializable_data():
     cfg_obj = load_config()
-    conn = init_db(cfg_obj.db_path)
+    conn = init_db(cfg_obj)
     
     config_dict = {
         "edge_threshold": cfg_obj.scanner.edge_threshold,
         "db_path": cfg_obj.db_path,
+        "database_url": cfg_obj.database_url,
         "pinnacle_key": cfg_obj.pinnacle_api_key,
         "poly_key": cfg_obj.polymarket_key,
         "sources": cfg_obj.sources
@@ -58,15 +59,28 @@ def load_serializable_data():
     pnl_sport = get_pnl_by_sport(conn)
     bankroll = get_bankroll(conn)
     
-    # Advanced History Loading
-    history_df = pd.read_sql("SELECT * FROM bankroll_history ORDER BY timestamp ASC", conn)
+    # Advanced History Loading (Safe for both dialects)
+    if _is_pg(conn):
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bankroll_history ORDER BY timestamp ASC")
+            history_df = pd.DataFrame(cur.fetchall())
+    else:
+        history_df = pd.read_sql("SELECT * FROM bankroll_history ORDER BY timestamp ASC", conn)
+        
     if not history_df.empty:
         history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
-        # Add a running total if needed, but 'balance' is already absolute
     
+    # Close connection if Postgres (Sqlite usually stays open in streamlit)
+    if _is_pg(conn):
+        conn.close()
+        
     return config_dict, signals_list, pnl_sport, bankroll, history_df
 
-config_dict, signals_list, pnl_sport, bankroll, history_df = load_serializable_data()
+try:
+    config_dict, signals_list, pnl_sport, bankroll, history_df = load_serializable_data()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
 
 # --- Advanced Computation ---
 pending   = [s for s in signals_list if s['status'] == "pending"]
@@ -121,26 +135,27 @@ with tab_live:
             roi = (profit / cost * 100) if cost > 0 else 0
             
             age_td = datetime.now(timezone.utc) - s['timestamp'].replace(tzinfo=timezone.utc)
-            
+            age_str = f"{int(age_td.total_seconds()//60)}m {int(age_td.total_seconds()%60)}s"
+
             live_rows.append({
                 "Matchup": f"{s['team1']} vs {s['team2']}",
                 "Sport": s['sport'].upper(),
                 "Poly Exec": f"{poly_side} ${s['suggested_size']:.2f} @ {s['poly_price']:.3f}",
                 "Sharp Hedge": f"${s['hedge_size'] or 0:.2f} @ {s['hedge_odds']:.3f}",
                 "Total Cost": cost,
-                "Locked Profit": profit,
+                "Profit": profit,
                 "ROI %": roi,
-                "Age": f"{int(age_td.total_seconds()//60)}m {int(age_td.total_seconds()%60)}s"
+                "Age": age_str
             })
         
         df_live = pd.DataFrame(live_rows)
         st.dataframe(
             df_live.style.format({
                 "Total Cost": "${:.2f}",
-                "Locked Profit": "${:.2f}",
+                "Profit": "${:.2f}",
                 "ROI %": "{:.2f}%"
             }).map(lambda x: "color: #00ff88; font-weight: bold;" if isinstance(x, (int, float)) and x > 0 else "", 
-                   subset=["Locked Profit", "ROI %"]),
+                   subset=["Profit", "ROI %"]),
             width="stretch", 
             hide_index=True
         )
@@ -192,7 +207,7 @@ with tab_analytics:
         k1, k2, k3, k4 = st.columns(4)
         if resolved:
             rdf = pd.DataFrame(resolved)
-            k1.metric("Avg Arb ROI", f"{(rdf['edge_pct'].mean()*100):.2f}%")
+            k1.metric("Avg Trade ROI", f"{(rdf['edge_pct'].mean()*100):.2f}%")
             k2.metric("Total Trades", len(resolved))
             k3.metric("Largest Win", f"${rdf['pnl'].max():.2f}")
             k4.metric("Sharpe Ratio", "Perfect (Arb)")
@@ -206,7 +221,6 @@ with tab_ledger:
     st.subheader("Complete Transaction History")
     all_history = sorted(signals_list, key=lambda x: x['timestamp'], reverse=True)
     if all_history:
-        # Display ledger first
         ledger_rows = []
         for s in all_history:
             status_color = "🟢" if s['status'] == "won" else ("🔴" if s['status'] == "lost" else ("⚪" if s['status'] == "pending" else "✖️"))
@@ -223,7 +237,7 @@ with tab_ledger:
             })
         st.dataframe(pd.DataFrame(ledger_rows), width="stretch", hide_index=True)
         
-        # Add manual settlement tools for pending trades
+        # Manual settlement
         pending_for_manual = [s for s in signals_list if s['status'] == "pending"]
         if pending_for_manual:
             with st.expander("🛠️ Manual Settlement Tool"):
@@ -234,9 +248,9 @@ with tab_ledger:
                 if col_go.button("Force Settle"):
                     conn = get_db_conn()
                     from polyedge.db.signals import resolve_signal
-                    # For manual settlement, assume current price doesn't matter much or is entry
                     target_sig = next(s for s in pending_for_manual if s['id'] == target_id)
                     resolve_signal(conn, target_id, outcome.lower(), target_sig['poly_price'])
+                    if _is_pg(conn): conn.close()
                     st.success(f"Signal {target_id} manually settled as {outcome}")
                     st.rerun()
     else:
@@ -257,7 +271,7 @@ with tab_config:
                 if abs(new_bank - bankroll) > 0.01:
                     update_bankroll(conn, new_bank - bankroll, "Manual update via Control Panel")
                 
-                # Persistence
+                # Persistence (config.toml)
                 import os as _os
                 config_path = _os.getenv("CONFIG_PATH", "config.toml")
                 try:
@@ -267,11 +281,11 @@ with tab_config:
                     st.success("Configuration updated successfully.")
                 except Exception as ex:
                     st.error(f"Config write failure: {ex}")
+                if _is_pg(conn): conn.close()
 
     with st.expander("📡 Source Management"):
         st.info("Toggle data sources. Requires scanner restart to take effect.")
         with st.form("source_toggle"):
-            # Get current states from config_dict
             pinnacle_active = st.checkbox("Pinnacle (Arcadia)", value=config_dict['sources'].get("pinnacle", True))
             stake_active = st.checkbox("Stake", value=config_dict['sources'].get("stake", False))
             mise_active = st.checkbox("Mise-o-jeu", value=config_dict['sources'].get("miseonjeu", False))
@@ -297,5 +311,7 @@ with tab_config:
             h_cols[i+1].success(f"{src.upper()}: Active")
         else:
             h_cols[i+1].error(f"{src.upper()}: Disabled")
+    
+    st.write(f"**Database Mode:** {'PostgreSQL' if config_dict['database_url'] else 'SQLite'}")
 
-st.caption(f"PolyEdge Elite v2.3 | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"PolyEdge Elite v2.3 | Mode: {'PG' if config_dict['database_url'] else 'Local'} | Last Refresh: {datetime.now().strftime('%H:%M:%S')}")

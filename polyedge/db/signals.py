@@ -2,54 +2,87 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from polyedge.models import Signal
+from typing import Any
 
-def insert_signal(conn: sqlite3.Connection, signal: Signal) -> int:
-    cur = conn.execute(
-        """INSERT INTO signals
+def _is_pg(conn: Any) -> bool:
+    return not isinstance(conn, sqlite3.Connection)
+
+def _get_placeholder(conn: Any) -> str:
+    return "%s" if _is_pg(conn) else "?"
+
+def _execute(conn: Any, sql: str, params: tuple = ()) -> Any:
+    """Helper to execute SQL across different dialects."""
+    if _is_pg(conn):
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        return cur
+    else:
+        return conn.execute(sql, params)
+
+def insert_signal(conn: Any, signal: Signal) -> int:
+    placeholder = _get_placeholder(conn)
+    sql = f"""INSERT INTO signals
            (timestamp,sport,league,team1,team2,game_date,edge_pct,poly_price,
             poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status,
             hedge_odds,hedge_size,arb_profit,hedge_cost_pct)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (signal.timestamp.isoformat(), signal.sport, signal.league,
+           VALUES ({','.join([placeholder]*18)})"""
+    
+    params = (signal.timestamp.isoformat(), signal.sport, signal.league,
          signal.team1, signal.team2, signal.game_date.isoformat(),
          signal.edge_pct, signal.poly_price, signal.poly_market_id,
          signal.fair_value, signal.kelly_fraction, signal.suggested_size,
          signal.sources_used, signal.status, 
-         signal.hedge_odds, signal.hedge_size, signal.arb_profit, signal.hedge_cost_pct),
-    )
-    conn.commit()
-    return cur.lastrowid
+         signal.hedge_odds, signal.hedge_size, signal.arb_profit, signal.hedge_cost_pct)
+    
+    if _is_pg(conn):
+        # Postgres needs RETURNING id to get the last row id easily
+        sql += " RETURNING id"
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        row_id = cur.fetchone()['id']
+        conn.commit()
+        return row_id
+    else:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.lastrowid
 
-def get_signal_by_id(conn: sqlite3.Connection, sid: int) -> Signal:
-    row = conn.execute("SELECT * FROM signals WHERE id=?", (sid,)).fetchone()
+def get_signal_by_id(conn: Any, sid: int) -> Signal:
+    cur = _execute(conn, "SELECT * FROM signals WHERE id=?", (sid,))
+    row = cur.fetchone()
     if row is None:
         raise ValueError(f"Signal {sid} not found")
     return _row(row)
 
-def get_bankroll(conn) -> float:
-    row = conn.execute("SELECT balance FROM bankroll WHERE id=1").fetchone()
-    return row["balance"] if row else 1000.0
+def get_bankroll(conn: Any) -> float:
+    cur = _execute(conn, "SELECT balance FROM bankroll WHERE id=1")
+    row = cur.fetchone()
+    return float(row["balance"]) if row else 1000.0
 
-def update_bankroll(conn, change: float, reason: str) -> None:
-    conn.execute("UPDATE bankroll SET balance = balance + ?, updated_at = datetime('now') WHERE id=1", (change,))
+def update_bankroll(conn: Any, change: float, reason: str) -> None:
+    _execute(conn, "UPDATE bankroll SET balance = balance + ?, updated_at = ? WHERE id=1", 
+             (change, datetime.now().isoformat()))
     new_bal = get_bankroll(conn)
-    conn.execute(
-        "INSERT INTO bankroll_history (timestamp, balance, change, reason) VALUES (datetime('now'), ?, ?, ?)",
-        (new_bal, change, reason),
+    _execute(conn, "INSERT INTO bankroll_history (timestamp, balance, change, reason) VALUES (?, ?, ?, ?)",
+        (datetime.now().isoformat(), new_bal, change, reason),
     )
     conn.commit()
 
-def get_signals(conn, sport=None, min_edge=0.0, status=None) -> list[Signal]:
-    q = "SELECT * FROM signals WHERE edge_pct >= ?"
+def get_signals(conn: Any, sport=None, min_edge=0.0, status=None) -> list[Signal]:
+    placeholder = _get_placeholder(conn)
+    q = f"SELECT * FROM signals WHERE edge_pct >= {placeholder}"
     p: list = [min_edge]
     if sport:
-        q += " AND sport=?"; p.append(sport)
+        q += f" AND sport={placeholder}"; p.append(sport)
     if status:
-        q += " AND status=?"; p.append(status)
+        q += f" AND status={placeholder}"; p.append(status)
     q += " ORDER BY timestamp DESC"
-    return [_row(r) for r in conn.execute(q, p).fetchall()]
+    
+    cur = _execute(conn, q, tuple(p))
+    return [_row(r) for r in cur.fetchall()]
 
-def resolve_signal(conn, sid: int, status: str, outcome_price: float) -> None:
+def resolve_signal(conn: Any, sid: int, status: str, outcome_price: float) -> None:
     s = get_signal_by_id(conn, sid)
     if status == "won":
         poly_pnl = s.suggested_size * (1.0 / s.poly_price - 1.0)
@@ -62,31 +95,30 @@ def resolve_signal(conn, sid: int, status: str, outcome_price: float) -> None:
         hedge_pnl = 0.0
     
     total_pnl = poly_pnl + hedge_pnl
-    conn.execute("UPDATE signals SET status=?,outcome_price=?,pnl=? WHERE id=?",
+    _execute(conn, "UPDATE signals SET status=?,outcome_price=?,pnl=? WHERE id=?",
                  (status, outcome_price, total_pnl, sid))
     if status in ("won", "lost"):
         update_bankroll(conn, total_pnl, f"Signal {sid} resolved as {status}")
     conn.commit()
 
-def get_pnl_by_sport(conn) -> dict[str, float]:
-    rows = conn.execute(
-        "SELECT sport, SUM(pnl) as total FROM signals WHERE pnl IS NOT NULL GROUP BY sport"
-    ).fetchall()
-    return {r["sport"]: r["total"] for r in rows}
+def get_pnl_by_sport(conn: Any) -> dict[str, float]:
+    cur = _execute(conn, "SELECT sport, SUM(pnl) as total FROM signals WHERE pnl IS NOT NULL GROUP BY sport")
+    rows = cur.fetchall()
+    return {r["sport"]: float(r["total"]) for r in rows}
 
-def log_scan(conn, markets_scanned, signals_found, sources_active, duration_ms):
-    conn.execute(
+def log_scan(conn: Any, markets_scanned, signals_found, sources_active, duration_ms):
+    _execute(conn, 
         "INSERT INTO scan_logs (timestamp,markets_scanned,signals_found,sources_active,duration_ms) VALUES (?,?,?,?,?)",
         (datetime.now(timezone.utc).isoformat(), markets_scanned, signals_found,
          ",".join(sources_active), duration_ms),
     )
     conn.commit()
 
-def _row(row: sqlite3.Row) -> Signal:
+def _row(row: Any) -> Signal:
     # helper to get value if column exists, else None (sqlite3.Row doesn't have .get())
     def g(key):
         try: return row[key]
-        except (IndexError, KeyError, sqlite3.OperationalError): return None
+        except (IndexError, KeyError, sqlite3.OperationalError, Exception): return None
 
     return Signal(
         id=row["id"],

@@ -18,6 +18,7 @@ class Config:
     sports: list[str]
     sources: dict[str, bool]
     db_path: str
+    database_url: str | None = None
     pinnacle_api_key: str = ""
     stake_api_key: str = ""
     miseonjeu_api_key: str = ""
@@ -43,11 +44,14 @@ def load_config(path: str | None = None) -> Config:
         bankroll=float(os.getenv("BANKROLL", raw.get("bankroll", 1000.0))),
     )
     db_path = os.getenv("DB_PATH", data.get("db", {}).get("path", "polyedge.db"))
+    database_url = os.getenv("DATABASE_URL", data.get("db", {}).get("url"))
+    
     return Config(
         scanner=scanner,
         sports=data.get("sports", {}).get("enabled", ["nba", "nhl", "mlb", "epl"]),
         sources=data.get("sources", {"pinnacle": True, "stake": True, "miseonjeu": True}),
         db_path=db_path,
+        database_url=database_url,
         pinnacle_api_key=os.getenv("PINNACLE_API_KEY", data.get("keys", {}).get("pinnacle_api_key", "")),
         stake_api_key=os.getenv("STAKE_API_KEY", data.get("keys", {}).get("stake_api_key", "")),
         miseonjeu_api_key=os.getenv("MISEONJEU_API_KEY", data.get("keys", {}).get("miseonjeu_api_key", "")),

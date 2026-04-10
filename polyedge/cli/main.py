@@ -30,7 +30,7 @@ console = Console()
 
 def _load(cfg_path="config.toml"):
     cfg = load_config(cfg_path)
-    return cfg, init_db(cfg.db_path)
+    return cfg, init_db(cfg)
 
 
 @app.command()
