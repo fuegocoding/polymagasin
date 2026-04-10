@@ -2,14 +2,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import httpx
+from stakeapi import StakeAPI
+from stakeapi.exceptions import StakeAPIError
 from polyedge.fetchers.base import BaseFetcher
 from polyedge.models import OddsLine
 from polyedge.matching.normalizer import normalize_team
 
-_URLS = [
-    "https://api.stake.com/graphql",
-    "https://stake.com/_api/graphql",
-]
 _SLUGS = {
     "basketball_nba": "nba",
     "ice_hockey_nhl": "nhl",
@@ -44,50 +42,31 @@ class StakeFetcher(BaseFetcher):
                 out.extend(r)
         return out
 
-    async def _sport(self, sport, slug) -> list[OddsLine]:
-        last = None
+    async def _sport(self, sport: str, slug: str) -> list[OddsLine]:
+        last: Exception | None = None
         for i in range(3):
             try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Origin": "https://stake.com",
-                    "Referer": "https://stake.com/",
-                    "Accept": "application/json",
-                }
-                if self.api_key:
-                    headers["x-access-token"] = self.api_key
-                    headers["Authorization"] = f"Bearer {self.api_key}"
-                payload = {
-                    "operationName": "SportsbookEventList",
-                    "query": _QUERY,
-                    "variables": {"sportSlug": slug, "limit": 200},
-                }
-                for url in _URLS:
-                    try:
-                        r = await self.client.post(
-                            url,
-                            json=payload,
-                            timeout=15.0,
-                            headers=headers,
-                        )
-                        r.raise_for_status()
-                        evs = r.json().get("data", {}).get("sportsbookEventList", [])
-                        if isinstance(evs, list):
-                            return [l for e in evs for l in [self._parse(e, sport)] if l]
-                    except Exception as e:
-                        last = e
-                        continue
-                if last is not None:
-                    raise last
-                raise RuntimeError("stake fetch failed: all endpoints failed with unknown error")
+                async with StakeAPI(access_token=self.api_key or None) as stake:
+                    data = await stake._graphql_request(
+                        _QUERY,
+                        variables={"sportSlug": slug, "limit": 200},
+                        operation_name="SportsbookEventList",
+                    )
+                evs = data.get("sportsbookEventList") or []
+                return [line for e in evs for line in [self._parse(e, sport)] if line]
+            except StakeAPIError as e:
+                last = e
+                if i < 2:
+                    await asyncio.sleep(2**i)
             except Exception as e:
                 last = e
                 if i < 2:
                     await asyncio.sleep(2**i)
-        raise last
+        if last is not None:
+            raise last
+        raise RuntimeError("stake fetch failed")
 
-    def _parse(self, ev, sport) -> OddsLine | None:
+    def _parse(self, ev: dict, sport: str) -> OddsLine | None:
         mkt = next(
             (m for m in ev.get("markets", []) if "winner" in m.get("name", "").lower()),
             None,

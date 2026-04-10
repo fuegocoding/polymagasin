@@ -1,7 +1,10 @@
-import pytest, respx, httpx
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+import httpx
 from polyedge.fetchers.stake import StakeFetcher
 
-MOCK = {"data": {"sportsbookEventList": [
+# Raw GraphQL data that StakeAPI._graphql_request returns (the "data" layer unwrapped)
+GRAPHQL_DATA = {"sportsbookEventList": [
     {"id": "s1", "name": "Los Angeles Lakers vs Golden State Warriors",
      "startTime": "2026-04-10T18:00:00.000Z",
      "sport": {"slug": "basketball_nba"},
@@ -14,23 +17,32 @@ MOCK = {"data": {"sportsbookEventList": [
      "markets": [{"id": "m2", "name": "Match Winner",
                   "outcomes": [{"id": "o3", "name": "Boston Celtics", "price": 1.40},
                                {"id": "o4", "name": "Miami Heat", "price": 3.10}]}]},
-]}}
+]}
+
+
+def _make_stake_api_mock(return_value):
+    """Return a patched StakeAPI context manager whose _graphql_request returns return_value."""
+    mock_client = AsyncMock()
+    mock_client._graphql_request = AsyncMock(return_value=return_value)
+
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    return mock_cm
+
 
 @pytest.mark.asyncio
 async def test_returns_lines():
-    with respx.mock:
-        respx.post("https://api.stake.com/graphql").mock(
-            return_value=httpx.Response(200, json=MOCK))
+    with patch("polyedge.fetchers.stake.StakeAPI", return_value=_make_stake_api_mock(GRAPHQL_DATA)):
         async with httpx.AsyncClient() as c:
             lines = await StakeFetcher(c).fetch(["nba"])
     assert len(lines) == 2
     assert all(l.source == "stake" for l in lines)
 
+
 @pytest.mark.asyncio
 async def test_correct_odds():
-    with respx.mock:
-        respx.post("https://api.stake.com/graphql").mock(
-            return_value=httpx.Response(200, json=MOCK))
+    with patch("polyedge.fetchers.stake.StakeAPI", return_value=_make_stake_api_mock(GRAPHQL_DATA)):
         async with httpx.AsyncClient() as c:
             lines = await StakeFetcher(c).fetch(["nba"])
     g = next(l for l in lines if "Lakers" in (l.team1, l.team2))
@@ -42,14 +54,16 @@ async def test_correct_odds():
 
 
 @pytest.mark.asyncio
-async def test_fallback_to_legacy_endpoint():
-    with respx.mock:
-        respx.post("https://api.stake.com/graphql").mock(
-            return_value=httpx.Response(404, json={"error": "not found"})
-        )
-        respx.post("https://stake.com/_api/graphql").mock(
-            return_value=httpx.Response(200, json=MOCK)
-        )
+async def test_api_key_forwarded_to_stakeapi():
+    """Ensure the access_token is passed to StakeAPI when a key is provided."""
+    call_args = {}
+
+    def capture_init(**kwargs):
+        call_args.update(kwargs)
+        return _make_stake_api_mock(GRAPHQL_DATA)
+
+    with patch("polyedge.fetchers.stake.StakeAPI", side_effect=capture_init):
         async with httpx.AsyncClient() as c:
-            lines = await StakeFetcher(c).fetch(["nba"])
-    assert len(lines) == 2
+            await StakeFetcher(c, api_key="my-test-key").fetch(["nba"])
+
+    assert call_args.get("access_token") == "my-test-key"
