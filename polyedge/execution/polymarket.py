@@ -17,14 +17,30 @@ class PolymarketExecutor(BaseExecutor):
         """Fetch USDC collateral balance from Polymarket CLOB."""
         try:
             loop = asyncio.get_event_loop()
-            # Correct method name is get_collateral() in py-clob-client
-            resp = await loop.run_in_executor(None, self.client.get_collateral)
+            
+            def _fetch():
+                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                # 1. Derive L2 API credentials
+                creds = self.client.derive_api_key()
+                # 2. Set the credentials on the client to upgrade to Level 2 Auth
+                self.client.set_api_creds(creds)
+                # 3. Fetch the collateral balance
+                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                return self.client.get_balance_allowance(params=params)
+
+            resp = await loop.run_in_executor(None, _fetch)
             print(f"[poly:exec] Raw Balance Response: {resp}")
             
             if isinstance(resp, dict):
-                # The response structure for get_collateral is usually {'balance': '...'}
+                # Response usually looks like {'balance': '123.45', 'allowance': '...'}
                 if "balance" in resp:
                     return float(resp["balance"])
+                if "amount" in resp:
+                    return float(resp["amount"])
+            
+            if isinstance(resp, (str, float, int)):
+                return float(resp)
+                
             return 0.0
         except Exception as e:
             print(f"[poly:exec] Balance error: {e}")

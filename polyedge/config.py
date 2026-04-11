@@ -3,6 +3,21 @@ import os
 import tomllib
 from dataclasses import dataclass
 
+# --- AIOHTTP PROXY MONKEY-PATCH FOR STAKEAPI ---
+try:
+    import aiohttp
+    if not hasattr(aiohttp.ClientSession, "_patched_for_proxy"):
+        _orig_request = aiohttp.ClientSession._request
+        async def _proxy_request(self, method, str_or_url, **kwargs):
+            proxy = os.getenv("STAKE_PROXY")
+            if proxy and 'stake.com' in str(str_or_url) and 'proxy' not in kwargs:
+                kwargs['proxy'] = proxy
+            return await _orig_request(self, method, str_or_url, **kwargs)
+        aiohttp.ClientSession._request = _proxy_request
+        aiohttp.ClientSession._patched_for_proxy = True
+except ImportError:
+    pass
+# -----------------------------------------------
 
 @dataclass
 class ScannerConfig:
