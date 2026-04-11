@@ -189,8 +189,20 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         
         # REAL MONEY EXECUTION
         if config.scanner.execution_enabled and bankroll >= 10.0:
-            await execute_arbitrage(config, sig, poly_token_id)
-            sig.status = "executed"
+            # We must verify we ACTUALLY have the funds on the specific platforms required
+            # bal_data was fetched at the start of the scan
+            hedge_platform = sig.sources_used.split(":")[0].lower()
+            poly_bal = bal_data.get("polymarket", 0.0)
+            hedge_bal = bal_data.get(hedge_platform, 0.0)
+            
+            if poly_bal < sig.suggested_size or hedge_bal < sig.hedge_size:
+                print(f"[scanner] INSUFFICIENT FUNDS OR API OFFLINE: Cannot execute arb. "
+                      f"Poly needs ${sig.suggested_size:.2f} (has ${poly_bal:.2f}), "
+                      f"{hedge_platform.capitalize()} needs ${sig.hedge_size:.2f} (has ${hedge_bal:.2f}).")
+                # We skip execution, but still insert it as 'pending' to track the missed opportunity
+            else:
+                await execute_arbitrage(config, sig, poly_token_id)
+                sig.status = "executed"
 
         insert_signal(conn, sig)
         signals.append(sig)
