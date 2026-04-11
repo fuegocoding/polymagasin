@@ -50,6 +50,11 @@ _TABLES = {
             balance     REAL NOT NULL,
             change      REAL NOT NULL,
             reason      TEXT
+        )""",
+    "system_meta": """
+        CREATE TABLE IF NOT EXISTS system_meta (
+            key         TEXT PRIMARY KEY,
+            value       TEXT
         )"""
 }
 
@@ -62,13 +67,20 @@ def init_db(config) -> Any:
         import psycopg2
         from psycopg2.extras import RealDictCursor
         conn = psycopg2.connect(config.database_url, cursor_factory=RealDictCursor)
-        # PostgreSQL specific adjustments to schema
-        # SQLite uses AUTOINCREMENT, Postgres uses SERIAL (handled above)
-        # SQLite INTEGER PRIMARY KEY AUTOINCREMENT -> Postgres SERIAL PRIMARY KEY
-        # We also need to fix the 'signals' and 'bankroll' id 1 check for Postgres
         with conn.cursor() as cur:
             for sql in _TABLES.values():
                 cur.execute(sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY"))
+            
+            # PURGE LOGIC: If we are in execution mode and haven't purged old simulation data yet
+            if config.scanner.execution_enabled:
+                cur.execute("SELECT value FROM system_meta WHERE key='data_purged'")
+                purged = cur.fetchone()
+                if not purged:
+                    print("[db] REAL MONEY MODE DETECTED: Purging old simulation trades...")
+                    cur.execute("DELETE FROM signals")
+                    cur.execute("DELETE FROM bankroll_history")
+                    cur.execute("DELETE FROM scan_logs")
+                    cur.execute("INSERT INTO system_meta (key, value) VALUES ('data_purged', 'true')")
             
             # Initialize bankroll if empty
             cur.execute("SELECT 1 FROM bankroll WHERE id=1")
@@ -83,9 +95,17 @@ def init_db(config) -> Any:
         conn = sqlite3.connect(config.db_path)
         conn.row_factory = sqlite3.Row
         for sql in _TABLES.values():
-            # Postgres SERIAL -> SQLite INTEGER PRIMARY KEY AUTOINCREMENT
             conn.execute(sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT"))
         
+        # PURGE LOGIC for local
+        if config.scanner.execution_enabled:
+            purged = conn.execute("SELECT value FROM system_meta WHERE key='data_purged'").fetchone()
+            if not purged:
+                print("[db] REAL MONEY MODE DETECTED: Purging old simulation trades...")
+                conn.execute("DELETE FROM signals")
+                conn.execute("DELETE FROM bankroll_history")
+                conn.execute("INSERT INTO system_meta (key, value) VALUES ('data_purged', 'true')")
+
         # Initialize bankroll if empty
         conn.execute("INSERT OR IGNORE INTO bankroll (id, balance, updated_at) VALUES (1, 1000.0, datetime('now'))")
         conn.commit()
