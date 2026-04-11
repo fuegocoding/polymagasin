@@ -17,22 +17,14 @@ class PolymarketExecutor(BaseExecutor):
         """Fetch USDC collateral balance from Polymarket CLOB."""
         try:
             loop = asyncio.get_event_loop()
-            # The SDK uses get_collateral_balance to check USDC in the CLOB
-            resp = await loop.run_in_executor(None, self.client.get_collateral_balance)
+            # Correct method name is get_collateral() in py-clob-client
+            resp = await loop.run_in_executor(None, self.client.get_collateral)
             print(f"[poly:exec] Raw Balance Response: {resp}")
             
             if isinstance(resp, dict):
-                # Standard response has 'balance' key
+                # The response structure for get_collateral is usually {'balance': '...'}
                 if "balance" in resp:
                     return float(resp["balance"])
-                # Sometimes it might be in a different field or nested
-                if "amount" in resp:
-                    return float(resp["amount"])
-            
-            # If resp is just a string or number
-            if isinstance(resp, (str, float, int)):
-                return float(resp)
-                
             return 0.0
         except Exception as e:
             print(f"[poly:exec] Balance error: {e}")
