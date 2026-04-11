@@ -105,7 +105,10 @@ if config_dict['execution_enabled']:
     try:
         cfg_for_bal = load_config()
         bal_breakdown = asyncio.run(get_live_nav_data(cfg_for_bal))
-        current_cash = bal_breakdown["total"]
+        if bal_breakdown and bal_breakdown.get("total", 0.0) > 0.0:
+            current_cash = bal_breakdown["total"]
+        else:
+            current_cash = db_bankroll
     except Exception:
         current_cash = db_bankroll
 

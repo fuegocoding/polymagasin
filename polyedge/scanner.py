@@ -111,7 +111,10 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
     if config.scanner.execution_enabled:
         bal_data = await get_total_live_balance(config)
         bankroll = bal_data["total"]
-        # Log the breakdown every scan so we know where the money is
+        if bankroll <= 0.0:
+            print("[scanner] Live balance fetch failed or returned $0. Falling back to local DB bankroll.")
+            bankroll = get_bankroll(conn)
+            
         print(f"[scanner] Net Asset Value: ${bankroll:,.2f} | breakdown: {bal_data}")
         if bankroll < 10.0:
             print("[scanner] WARNING: Total balance < $10. Skipping execution to prevent tiny bets.")
