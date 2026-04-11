@@ -10,18 +10,29 @@ class PolymarketExecutor(BaseExecutor):
         self.private_key = private_key
         host = "https://clob.polymarket.com"
         chain_id = POLYGON
-        # py-clob-client uses 'key' for the private key parameter
+        # Initialize client. Note: 'key' is the private key parameter.
         self.client = ClobClient(host, chain_id=chain_id, key=private_key)
 
     async def get_balance(self) -> float:
         """Fetch USDC collateral balance from Polymarket CLOB."""
         try:
             loop = asyncio.get_event_loop()
-            # The SDK uses get_collateral_balance to check how much USDC is in the CLOB
-            # Note: This checks the user's allowance and balance on-chain or in the proxy
+            # The SDK uses get_collateral_balance to check USDC in the CLOB
             resp = await loop.run_in_executor(None, self.client.get_collateral_balance)
-            if resp and "balance" in resp:
-                return float(resp["balance"])
+            print(f"[poly:exec] Raw Balance Response: {resp}")
+            
+            if isinstance(resp, dict):
+                # Standard response has 'balance' key
+                if "balance" in resp:
+                    return float(resp["balance"])
+                # Sometimes it might be in a different field or nested
+                if "amount" in resp:
+                    return float(resp["amount"])
+            
+            # If resp is just a string or number
+            if isinstance(resp, (str, float, int)):
+                return float(resp)
+                
             return 0.0
         except Exception as e:
             print(f"[poly:exec] Balance error: {e}")

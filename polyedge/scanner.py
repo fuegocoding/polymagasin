@@ -38,6 +38,10 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
 async def get_total_live_balance(config: Config) -> dict[str, float]:
     """Fetch live balances from all active platforms and return as a dict."""
     balances = {"total": 0.0, "polymarket": 0.0, "pinnacle": 0.0, "stake": 0.0}
+    
+    # DEBUG: Verify keys are loaded (masked)
+    print(f"[scanner] Key Check: Poly={bool(config.polymarket_key)}, Pinn={bool(config.pinnacle_api_key)}, Stake={bool(config.stake_api_key)}")
+    
     tasks = []
     names = []
     
@@ -52,6 +56,7 @@ async def get_total_live_balance(config: Config) -> dict[str, float]:
         names.append("stake")
     
     if not tasks:
+        print("[scanner] No execution keys found in environment variables.")
         return balances
         
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -60,7 +65,7 @@ async def get_total_live_balance(config: Config) -> dict[str, float]:
             balances[name] = float(res)
             balances["total"] += float(res)
         else:
-            print(f"[scanner] Error fetching balance for {name}: {res}")
+            print(f"[scanner] CRITICAL: Error fetching balance for {name}: {res}")
             
     return balances
 
@@ -106,9 +111,10 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
     if config.scanner.execution_enabled:
         bal_data = await get_total_live_balance(config)
         bankroll = bal_data["total"]
-        print(f"[scanner] Live Bankroll fetched: ${bankroll:,.2f} ({bal_data})")
+        # Log the breakdown every scan so we know where the money is
+        print(f"[scanner] Net Asset Value: ${bankroll:,.2f} | breakdown: {bal_data}")
         if bankroll < 10.0:
-            print("[scanner] WARNING: Low balance, skipping execution.")
+            print("[scanner] WARNING: Total balance < $10. Skipping execution to prevent tiny bets.")
             bankroll = get_bankroll(conn)
     else:
         bankroll = get_bankroll(conn)
@@ -178,6 +184,7 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
             hedge_selection_id=hedge_selection_id
         )
         
+        # REAL MONEY EXECUTION
         if config.scanner.execution_enabled and bankroll >= 10.0:
             await execute_arbitrage(config, sig, poly_token_id)
             sig.status = "executed"

@@ -12,29 +12,39 @@ class StakeExecutor(BaseExecutor):
         try:
             async with StakeAPI(access_token=self.api_key) as client:
                 balance = await client.get_user_balance()
-                # StakeAPI typically returns balance in various currencies
-                # We prioritize USDT for a USD equivalent
+                print(f"[stake:exec] Raw Balance Response: {balance}")
+                
+                # StakeAPI might return a Pydantic model or a dict
+                # If it's a model, convert to dict for easier parsing
+                if hasattr(balance, 'dict'):
+                    balance = balance.dict()
+                elif hasattr(balance, 'model_dump'):
+                    balance = balance.model_dump()
+                
                 if isinstance(balance, dict):
-                    # Check for 'available' key or similar structure
-                    # According to previous search, it has 'available'
-                    available = balance.get('available', {})
-                    if isinstance(available, dict):
-                        return float(available.get('amount', 0.0))
-                    return float(available)
+                    # Check for common structures: 'available', 'amount', etc.
+                    # Usually it's balance['available']['amount'] or balance['amount']
+                    if 'available' in balance:
+                        avail = balance['available']
+                        if isinstance(avail, dict):
+                            return float(avail.get('amount', 0.0))
+                        return float(avail)
+                    if 'amount' in balance:
+                        return float(balance['amount'])
+                
+                # If it's just a number
+                if isinstance(balance, (float, int)):
+                    return float(balance)
+                    
                 return 0.0
         except Exception as e:
             print(f"[stake:exec] Balance error: {e}")
             return 0.0
 
     async def place_order(self, market_id: str, side: str, size_usd: float, price: float) -> TradeResult:
-        """
-        Stake.com sports betting.
-        Note: Actual bet placement method name might vary (e.g. create_sports_bet).
-        """
         try:
             async with StakeAPI(access_token=self.api_key) as client:
-                # This is a placeholder for the actual sports betting method in StakeAPI
-                # In a real scenario, we'd use client.place_sports_bet(...)
+                # Simulation placeholder
                 return TradeResult(success=True, order_id=f"stake_sim_{market_id}")
         except Exception as e:
             return TradeResult(success=False, error=str(e))
