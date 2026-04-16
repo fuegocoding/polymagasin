@@ -10,7 +10,21 @@ from polyedge.edge.kelly import quarter_kelly_size
 from polyedge.db.signals import insert_signal, get_signals, resolve_signal, get_bankroll, get_signal_by_id
 from polyedge.execution.polymarket import PolymarketExecutor
 from polyedge.execution.pinnacle import PinnacleExecutor
-from polyedge.execution.stake import StakeExecutor
+
+# Platforms where we link for manual trading instead of auto-executing
+_MANUAL_PLATFORMS = {"stake", "miseonjeu"}
+
+_STAKE_SPORT_SLUGS = {"nba": "basketball", "nhl": "ice-hockey", "mlb": "baseball", "epl": "soccer"}
+_MOJ_SPORT_PATHS = {"nba": "basketball/nba", "nhl": "ice_hockey/nhl", "mlb": "baseball/mlb", "epl": "football/england/premier_league"}
+
+def _build_hedge_url(platform: str, sport: str) -> str:
+    if platform == "stake":
+        slug = _STAKE_SPORT_SLUGS.get(sport, sport)
+        return f"https://stake.com/sports/{slug}"
+    if platform == "miseonjeu":
+        path = _MOJ_SPORT_PATHS.get(sport, sport)
+        return f"https://www.miseonjeu.com/fr/sports/{path}"
+    return ""
 
 def auto_resolve(conn, poly_markets: list) -> list[tuple]:
     """Resolve pending signals where Polymarket price has settled (>0.95 or <0.05)."""
@@ -36,29 +50,25 @@ def auto_resolve(conn, poly_markets: list) -> list[tuple]:
 
 
 async def get_total_live_balance(config: Config) -> dict[str, float]:
-    """Fetch live balances from all active platforms and return as a dict."""
-    balances = {"total": 0.0, "polymarket": 0.0, "pinnacle": 0.0, "stake": 0.0}
-    
-    # DEBUG: Verify keys are loaded (masked)
-    print(f"[scanner] Key Check: Poly={bool(config.polymarket_key)}, Pinn={bool(config.pinnacle_api_key)}, Stake={bool(config.stake_api_key)}")
-    
+    """Fetch live balances from automated trading platforms (Polymarket, Pinnacle)."""
+    balances = {"total": 0.0, "polymarket": 0.0, "pinnacle": 0.0}
+
+    print(f"[scanner] Key Check: Poly={bool(config.polymarket_key)}, Pinn={bool(config.pinnacle_api_key)}")
+
     tasks = []
     names = []
-    
+
     if config.polymarket_key:
         tasks.append(PolymarketExecutor(config.polymarket_key).get_balance())
         names.append("polymarket")
     if config.pinnacle_api_key:
         tasks.append(PinnacleExecutor(config.pinnacle_api_key).get_balance())
         names.append("pinnacle")
-    if config.stake_api_key:
-        tasks.append(StakeExecutor(config.stake_api_key).get_balance())
-        names.append("stake")
-    
+
     if not tasks:
         print("[scanner] No execution keys found in environment variables.")
         return balances
-        
+
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for name, res in zip(names, results):
         if isinstance(res, (float, int)):
@@ -66,36 +76,36 @@ async def get_total_live_balance(config: Config) -> dict[str, float]:
             balances["total"] += float(res)
         else:
             print(f"[scanner] CRITICAL: Error fetching balance for {name}: {res}")
-            
+
     return balances
 
 
 async def execute_arbitrage(config: Config, signal: Signal, poly_token_id: str):
-    """Perform real trades on both platforms."""
+    """Execute automated trades on Polymarket + Pinnacle. Manual platforms are skipped."""
     hedge_platform = signal.sources_used.split(":")[0].lower()
-    poly_exec = PolymarketExecutor(config.polymarket_key)
-    
-    if hedge_platform == "pinnacle":
-        hedge_exec = PinnacleExecutor(config.pinnacle_api_key)
-    elif hedge_platform == "stake":
-        hedge_exec = StakeExecutor(config.stake_api_key)
-    else:
-        print(f"[exec] ERROR: Unsupported hedge platform {hedge_platform}")
+
+    if hedge_platform in _MANUAL_PLATFORMS:
+        print(f"[exec] {hedge_platform} is manual-only — trade at: {signal.hedge_url}")
         return
 
+    if hedge_platform == "pinnacle":
+        hedge_exec = PinnacleExecutor(config.pinnacle_api_key)
+    else:
+        print(f"[exec] ERROR: Unsupported automated hedge platform: {hedge_platform}")
+        return
+
+    poly_exec = PolymarketExecutor(config.polymarket_key)
     print(f"[exec] EXECUTION START: {signal.team1} vs {signal.team2} on {hedge_platform}")
-    
-    # 1. Start both trades concurrently
+
     poly_task = asyncio.create_task(poly_exec.place_order(
-        token_id=poly_token_id, side="BUY", 
+        token_id=poly_token_id, side="BUY",
         size_usd=signal.suggested_size, price=signal.poly_price
     ))
-    
     hedge_task = asyncio.create_task(hedge_exec.place_order(
         selection_id=signal.hedge_selection_id, side="BUY",
         size_usd=signal.hedge_size, price=signal.hedge_odds
     ))
-    
+
     results = await asyncio.gather(poly_task, hedge_task, return_exceptions=True)
     for i, res in enumerate(results):
         platform = "Polymarket" if i == 0 else hedge_platform.capitalize()
@@ -174,6 +184,7 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
         size, frac = quarter_kelly_size(arb_profit, fair_val, bankroll)
         if entry_price < 0.01 or not poly_token_id: continue
 
+        hedge_platform = best_line.source.lower()
         sig = Signal(
             timestamp=now, sport=market.sport, league=best_line.league,
             team1=(market.team_yes if bet_yes == match.team_is_home else market.team_no),
@@ -184,25 +195,25 @@ async def run_scan(poly_markets, odds_lines, config: Config, conn) -> list[Signa
             sources_used=f"{best_line.source}:{'YES' if bet_yes else 'NO'}",
             hedge_odds=round(hedge_odds, 4), hedge_size=round((size/entry_price)/hedge_odds, 2),
             arb_profit=round(arb_profit, 4), hedge_cost_pct=round(1.0/hedge_odds, 4),
-            hedge_selection_id=hedge_selection_id
+            hedge_selection_id=hedge_selection_id,
+            hedge_url=_build_hedge_url(hedge_platform, market.sport) if hedge_platform in _MANUAL_PLATFORMS else None,
         )
-        
+
         # REAL MONEY EXECUTION
         if config.scanner.execution_enabled and bankroll >= 10.0:
-            # We must verify we ACTUALLY have the funds on the specific platforms required
-            # bal_data was fetched at the start of the scan
-            hedge_platform = sig.sources_used.split(":")[0].lower()
-            poly_bal = bal_data.get("polymarket", 0.0)
-            hedge_bal = bal_data.get(hedge_platform, 0.0)
-            
-            if poly_bal < sig.suggested_size or hedge_bal < sig.hedge_size:
-                print(f"[scanner] INSUFFICIENT FUNDS OR API OFFLINE: Cannot execute arb. "
-                      f"Poly needs ${sig.suggested_size:.2f} (has ${poly_bal:.2f}), "
-                      f"{hedge_platform.capitalize()} needs ${sig.hedge_size:.2f} (has ${hedge_bal:.2f}).")
-                # We skip execution, but still insert it as 'pending' to track the missed opportunity
+            if hedge_platform in _MANUAL_PLATFORMS:
+                print(f"[scanner] {hedge_platform} signal — manual trade required at: {sig.hedge_url}")
             else:
-                await execute_arbitrage(config, sig, poly_token_id)
-                sig.status = "executed"
+                poly_bal = bal_data.get("polymarket", 0.0)
+                hedge_bal = bal_data.get(hedge_platform, 0.0)
+
+                if poly_bal < sig.suggested_size or hedge_bal < sig.hedge_size:
+                    print(f"[scanner] INSUFFICIENT FUNDS OR API OFFLINE: Cannot execute arb. "
+                          f"Poly needs ${sig.suggested_size:.2f} (has ${poly_bal:.2f}), "
+                          f"{hedge_platform.capitalize()} needs ${sig.hedge_size:.2f} (has ${hedge_bal:.2f}).")
+                else:
+                    await execute_arbitrage(config, sig, poly_token_id)
+                    sig.status = "executed"
 
         insert_signal(conn, sig)
         signals.append(sig)

@@ -13,24 +13,26 @@ def print_signals_table(signals: list[Signal], title="PolyEdge Arbitrage Opportu
     t.add_column("Sport", width=6)
     t.add_column("Matchup", min_width=25)
     t.add_column("Poly (Buy)", justify="right")
-    t.add_column("Hedge (Sharp)", justify="right")
+    t.add_column("Hedge", justify="right")
     t.add_column("Total Cost", justify="right", style="dim")
     t.add_column("Locked Profit", justify="right", style="bold green")
     t.add_column("Edge %", justify="right", style="bold green")
-    
+
     for s in sorted(signals, key=lambda x: x.edge_pct, reverse=True):
-        # Total cost = Poly stake + Hedge stake
         total_cost = s.suggested_size + (s.hedge_size or 0)
-        # Payout if Poly wins = s.suggested_size / s.poly_price
-        # Locked profit = Payout - Total Cost
         locked_profit = (s.suggested_size / s.poly_price) - total_cost if s.poly_price > 0 else 0
-        
+
         poly_side = s.sources_used.split(":")[-1]
+        hedge_label = (
+            f"[link={s.hedge_url}]MANUAL ${s.hedge_size or 0:.2f} @ {s.hedge_odds or 0:.2f}[/link]"
+            if s.hedge_url else
+            f"HEDGE ${s.hedge_size or 0:.2f} @ {s.hedge_odds or 0:.2f}"
+        )
         t.add_row(
             s.sport.upper(),
             f"{s.team1} vs {s.team2}",
             f"{poly_side} ${s.suggested_size:.2f} @ {s.poly_price:.3f}",
-            f"HEDGE ${s.hedge_size or 0:.2f} @ {s.hedge_odds or 0:.2f}",
+            hedge_label,
             f"${total_cost:.2f}",
             f"${locked_profit:.2f}",
             f"{s.edge_pct*100:.1f}%"
