@@ -23,8 +23,10 @@ _TABLES = {
             hedge_odds      REAL,
             hedge_size      REAL,
             arb_profit      REAL,
-            hedge_cost_pct  REAL,
-            status          TEXT NOT NULL DEFAULT 'pending',
+            hedge_cost_pct      REAL,
+            hedge_selection_id  TEXT,
+            hedge_url           TEXT,
+            status              TEXT NOT NULL DEFAULT 'pending',
             outcome_price   REAL,
             pnl             REAL
         )""",

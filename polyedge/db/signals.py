@@ -25,16 +25,16 @@ def insert_signal(conn: Any, signal: Signal) -> int:
     sql = f"""INSERT INTO signals
            (timestamp,sport,league,team1,team2,game_date,edge_pct,poly_price,
             poly_market_id,fair_value,kelly_fraction,suggested_size,sources_used,status,
-            hedge_odds,hedge_size,arb_profit,hedge_cost_pct,hedge_selection_id)
-           VALUES ({','.join([placeholder]*19)})"""
-    
+            hedge_odds,hedge_size,arb_profit,hedge_cost_pct,hedge_selection_id,hedge_url)
+           VALUES ({','.join([placeholder]*20)})"""
+
     params = (signal.timestamp.isoformat(), signal.sport, signal.league,
          signal.team1, signal.team2, signal.game_date.isoformat(),
          signal.edge_pct, signal.poly_price, signal.poly_market_id,
          signal.fair_value, signal.kelly_fraction, signal.suggested_size,
-         signal.sources_used, signal.status, 
+         signal.sources_used, signal.status,
          signal.hedge_odds, signal.hedge_size, signal.arb_profit, signal.hedge_cost_pct,
-         signal.hedge_selection_id)
+         signal.hedge_selection_id, signal.hedge_url)
     
     if _is_pg(conn):
         sql += " RETURNING id"
@@ -132,7 +132,8 @@ def _row(row: Any) -> Signal:
         sources_used=row["sources_used"], status=row["status"],
         outcome_price=row["outcome_price"], pnl=row["pnl"],
         hedge_odds=row["hedge_odds"], hedge_size=row["hedge_size"],
-        arb_profit=g("arb_profit"), 
+        arb_profit=g("arb_profit"),
         hedge_cost_pct=g("hedge_cost_pct"),
-        hedge_selection_id=g("hedge_selection_id")
+        hedge_selection_id=g("hedge_selection_id"),
+        hedge_url=g("hedge_url")
     )

@@ -49,7 +49,8 @@ class Signal:
     hedge_size: float | None = None
     arb_profit: float | None = None
     hedge_cost_pct: float | None = None
-    hedge_selection_id: str | None = None # The ID needed by the sportsbook
+    hedge_selection_id: str | None = None
+    hedge_url: str | None = None  # Manual trade link for stake/miseonjeu
     status: str = "pending"
     outcome_price: float | None = None
     pnl: float | None = None
